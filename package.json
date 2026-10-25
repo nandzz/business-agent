@@ -1,0 +1,20 @@
+{
+  "name": "business-agent",
+  "private": true,
+  "type": "module",
+  "description": "Nandzz Business Agent: WhatsApp webhook, per-chat queue and agent worker (Cloudflare Workers + Durable Objects).",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "simulate": "node scripts/simulate.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "openai": "^7.43.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261025.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.152.0"
+  }
+}

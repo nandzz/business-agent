@@ -1,0 +1,17 @@
+# Copy to .dev.vars (gitignored) and fill in. `wrangler dev` loads it.
+
+# Meta app (developers.facebook.com → your app → App settings → Basic)
+META_APP_SECRET=
+# Any string; paste the same value in the Meta webhook config.
+META_VERIFY_TOKEN=
+# Quickstart temporary token (24h) or a System User token with whatsapp_business_messaging.
+META_ACCESS_TOKEN=
+
+# OpenAI "business-agent" project key
+OPENAI_API_KEY=
+
+# Local-only switches (override wrangler.jsonc vars)
+# DRY_RUN=1 logs replies instead of sending them to WhatsApp.
+DRY_RUN=0
+# DEBUG_ROUTES=1 enables GET /debug/chat?phone_number_id=…&wa_id=… (never in prod).
+DEBUG_ROUTES=1
