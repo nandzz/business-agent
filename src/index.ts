@@ -2,6 +2,7 @@
 // routes each message to its chat's Durable Object and answers 200 at once
 // (Meta retries anything slow or non-2xx).
 import { isOn, type Env } from "./env";
+import { callAgentTool } from "./mcp";
 import { extractEvents, verifySignature, type WebhookPayload } from "./meta";
 
 export { ChatQueue } from "./chat";
@@ -54,6 +55,24 @@ export default {
       const waId = url.searchParams.get("wa_id") ?? "";
       const state = await env.CHAT.getByName(chatName(phoneNumberId, waId)).inspect();
       return Response.json(state);
+    }
+
+    if (url.pathname === "/debug/mcp-ping" && request.method === "GET" && isOn(env.DEBUG_ROUTES)) {
+      // Phase 0 probe: worker → mcp-agent → Postgres token check, timed.
+      const t0 = Date.now();
+      try {
+        const result = await callAgentTool(
+          env,
+          {
+            phoneNumberId: url.searchParams.get("phone_number_id") ?? "debug",
+            customerWaId: url.searchParams.get("wa_id") ?? "390000000000",
+          },
+          "ping",
+        );
+        return Response.json({ ms: Date.now() - t0, result });
+      } catch (err) {
+        return Response.json({ ms: Date.now() - t0, error: String(err) }, { status: 502 });
+      }
     }
 
     if (url.pathname === "/health") return new Response("ok");

@@ -10,6 +10,10 @@ META_ACCESS_TOKEN=
 # OpenAI "business-agent" project key
 OPENAI_API_KEY=
 
+# Signs per-call run tokens for mcp-agent. Same value as the Vault secret
+# agent_run_token_secret in the Supabase project (≥32 chars).
+AGENT_RUN_TOKEN_SECRET=
+
 # Local-only switches (override wrangler.jsonc vars)
 # DRY_RUN=1 logs replies instead of sending them to WhatsApp.
 DRY_RUN=0

@@ -13,6 +13,7 @@
   // and `wrangler secret put` when deployed.
   "vars": {
     "GRAPH_API_VERSION": "v23.0",
+    "MCP_AGENT_URL": "https://tbzxiuciztqmbnzvtryp.supabase.co/functions/v1/mcp-agent",
     "OPENAI_MODEL": "gpt-6-luna",
     "OPENAI_TRANSCRIBE_MODEL": "gpt-transcribe",
     "DEBOUNCE_MS": "3000",

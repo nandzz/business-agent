@@ -8,9 +8,12 @@ export interface Env {
   META_VERIFY_TOKEN: string;
   META_ACCESS_TOKEN: string;
   OPENAI_API_KEY: string;
+  // Signs per-call run tokens for mcp-agent (same value as Vault agent_run_token_secret).
+  AGENT_RUN_TOKEN_SECRET: string;
 
   // Plain vars (wrangler.jsonc)
   GRAPH_API_VERSION: string;
+  MCP_AGENT_URL: string;
   OPENAI_MODEL: string;
   OPENAI_TRANSCRIBE_MODEL: string;
   DEBOUNCE_MS: string;
