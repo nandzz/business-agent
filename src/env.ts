@@ -26,4 +26,7 @@ export function intVar(value: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+// Logs never carry a full phone number / wa_id.
+export const maskWaId = (waId: string) => `${waId.slice(0, -4)}••••`;
+
 export const isOn = (value: string | undefined) => value === "1" || value === "true";

@@ -5,7 +5,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { minutesOf, todayInZone, weekdayOf } from "@/features/booking/domain/calendar";
 import { runAgent, transcribe, type Turn } from "./agent";
-import { intVar, isOn, type Env } from "./env";
+import { intVar, isOn, maskWaId, type Env } from "./env";
 import { businessFor, type Business } from "./fixture";
 import { downloadMedia, markReadAndTyping, sendText, type InboundEvent, type WaMessage } from "./meta";
 
@@ -129,7 +129,7 @@ export class ChatQueue extends DurableObject<Env> {
 
       const t2 = Date.now();
       if (result.text) {
-        if (dryRun) console.log(JSON.stringify({ evt: "dry_run_reply", to: state.customerWaId, text: result.text }));
+        if (dryRun) console.log(JSON.stringify({ evt: "dry_run_reply", to: maskWaId(state.customerWaId), text: result.text }));
         else await sendText(this.env, state.phoneNumberId, state.customerWaId, result.text);
         turns.push({ role: "agent", text: result.text, at: Date.now() });
       }
@@ -195,7 +195,7 @@ function messageText(m: WaMessage): string | null {
 }
 
 const chatKey = (s: { phoneNumberId: string; customerWaId: string }) =>
-  `${s.phoneNumberId}:${s.customerWaId.slice(0, -4)}••••`;
+  `${s.phoneNumberId}:${maskWaId(s.customerWaId)}`;
 
 function withinAgentHours(business: Business, now: Date): boolean {
   if (!business.agentHours) return true;

@@ -3,6 +3,7 @@
 // from the verified webhook via ToolContext, never from the model's arguments.
 import type { FunctionTool } from "openai/resources/responses/responses";
 import { computeAvailableSlots, todayInZone } from "@/features/booking/domain/calendar";
+import { maskWaId } from "./env";
 import type { Business } from "./fixture";
 
 export type ToolContext = {
@@ -151,7 +152,15 @@ export async function executeTool(
       const mode = business.autonomy.newBooking;
       if (mode === "off") return { error: "booking through chat is disabled; offer to hand off" };
       // Spike: nothing is persisted. Later: create_booking_tx via the Agent MCP.
-      console.log(JSON.stringify({ evt: "booking_simulated", mode, customer: ctx.customerWaId, ...args }));
+      console.log(
+        JSON.stringify({
+          evt: "booking_simulated",
+          mode,
+          customer: maskWaId(ctx.customerWaId),
+          service_id: service.id,
+          start: String(args.start),
+        }),
+      );
       return {
         status: mode === "pending" ? "pending_owner_approval" : "confirmed",
         service: service.name,
@@ -164,7 +173,9 @@ export async function executeTool(
     }
     case "hand_off":
       // Spike: log only. Later: activity feed + owner alert (email/Twilio/in-app).
-      console.log(JSON.stringify({ evt: "hand_off", customer: ctx.customerWaId, reason: args.reason }));
+      // The free-text reason stays out of logs (it can quote the customer);
+      // it will go to the owner's activity feed instead.
+      console.log(JSON.stringify({ evt: "hand_off", customer: maskWaId(ctx.customerWaId) }));
       return { ok: true, note: "Tell the customer someone from the business will reply soon." };
     default:
       return { error: `unknown tool ${name}` };
