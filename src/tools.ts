@@ -83,7 +83,7 @@ export const TOOL_DEFS: FunctionTool[] = [
     type: "function",
     name: "create_booking",
     description:
-      "Book for the customer in this chat. Only call it AFTER the customer explicitly said yes to a summary of service, day and time.",
+      "Book for the customer in this chat. Call it as soon as the customer said yes to your question to book one specific service, day and time; it re-checks that the time is still free.",
     parameters: {
       type: "object",
       properties: {
@@ -91,7 +91,7 @@ export const TOOL_DEFS: FunctionTool[] = [
         location_id: nullable("string"),
         staff_id: nullable("string"),
         start: { type: "string", description: "Slot start exactly as returned by check_availability" },
-        customer_name: nullable("string", "The name the customer gave for the booking"),
+        customer_name: nullable("string", "The booking name: the one the customer gave, else null to use their WhatsApp display name"),
       },
       required: ["service_ids", "location_id", "staff_id", "start", "customer_name"],
       additionalProperties: false,

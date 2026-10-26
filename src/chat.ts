@@ -4,7 +4,7 @@
 // model's working context; the conversation of record lives in Supabase
 // (agent_messages, written through mcp-agent).
 import { DurableObject } from "cloudflare:workers";
-import { runAgent, transcribe, type Turn } from "./agent";
+import { replyTurn, runAgent, transcribe, trimTurns, type Turn } from "./agent";
 import { describeApproval, type ApprovalView } from "./approvals";
 import { loadContext, type AgentContext } from "./context";
 import { intVar, isOn, maskWaId, type Env } from "./env";
@@ -210,7 +210,7 @@ export class ChatQueue extends DurableObject<Env> {
       if (result.text) {
         const wamid = await this.sendReply(state, result.text);
         replied = true;
-        const reply: Turn = { role: "agent", text: result.text, at: Date.now() };
+        const reply = replyTurn(result);
         turns.push(reply);
         newTurns.push(reply);
         logged.push({ direction: "out", kind: "text", body: result.text, wamid, at: Date.now() });
@@ -219,7 +219,7 @@ export class ChatQueue extends DurableObject<Env> {
 
       // Persist the turns, merging with anything that arrived during the run.
       const fresh = (await this.load()) ?? state;
-      fresh.turns = turns.slice(-maxTurns);
+      fresh.turns = trimTurns(turns, maxTurns);
       fresh.inflight = undefined;
       await this.save(fresh);
       await this.clearWatchdog(fresh);
@@ -254,7 +254,7 @@ export class ChatQueue extends DurableObject<Env> {
       await this.save(fresh);
       if (!replied) return this.giveUp(newTurns, logged, maxTurns);
       // Answered but failed afterwards: keep the context like a normal run.
-      fresh.turns = [...fresh.turns, ...newTurns].slice(-maxTurns);
+      fresh.turns = trimTurns([...fresh.turns, ...newTurns], maxTurns);
       await this.save(fresh);
       await this.clearWatchdog(fresh);
       await this.logMessages(state, logged);
@@ -266,7 +266,7 @@ export class ChatQueue extends DurableObject<Env> {
   private async giveUp(newTurns: Turn[], logged: LoggedMessage[], maxTurns: number) {
     const state = await this.load();
     if (!state) return;
-    state.turns = [...state.turns, ...newTurns].slice(-maxTurns);
+    state.turns = trimTurns([...state.turns, ...newTurns], maxTurns);
     await this.save(state);
     await this.clearWatchdog(state);
     await this.logMessages(state, logged);
@@ -346,9 +346,7 @@ export class ChatQueue extends DurableObject<Env> {
     const wamid = await this.sendReply(state, result.text);
 
     const fresh = (await this.load()) ?? state;
-    fresh.turns = [...fresh.turns, { role: "agent" as const, text: result.text, at: Date.now() }].slice(
-      -intVar(this.env.MAX_INPUT_MESSAGES, 20),
-    );
+    fresh.turns = trimTurns([...fresh.turns, replyTurn(result)], intVar(this.env.MAX_INPUT_MESSAGES, 20));
     await this.save(fresh);
     await this.logMessages(fresh, [{ direction: "out", kind: "text", body: result.text, wamid, at: Date.now() }]);
     console.log(
