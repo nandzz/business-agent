@@ -19,3 +19,6 @@ AGENT_RUN_TOKEN_SECRET=
 DRY_RUN=0
 # DEBUG_ROUTES=1 enables GET /debug/chat?phone_number_id=…&wa_id=… (never in prod).
 DEBUG_ROUTES=1
+
+# Signs the portal's /internal/approval-decided pings (same value as the portal's AGENT_NOTIFY_SECRET)
+AGENT_NOTIFY_SECRET=

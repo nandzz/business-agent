@@ -10,6 +10,8 @@ export interface Env {
   OPENAI_API_KEY: string;
   // Signs per-call run tokens for mcp-agent (same value as Vault agent_run_token_secret).
   AGENT_RUN_TOKEN_SECRET: string;
+  // Signs the portal's /internal/approval-decided pings (same value in the portal).
+  AGENT_NOTIFY_SECRET: string;
 
   // Plain vars (wrangler.jsonc)
   GRAPH_API_VERSION: string;

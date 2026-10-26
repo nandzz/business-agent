@@ -207,6 +207,54 @@ export class ChatQueue extends DurableObject<Env> {
     }
   }
 
+  // The owner decided a pending request in Nandzz: read the outcome (scoped to
+  // this chat) and tell the customer in the conversation's language.
+  async approvalDecided(phoneNumberId: string, customerWaId: string, approvalId: string): Promise<void> {
+    const state: ChatState = (await this.load()) ?? {
+      phoneNumberId,
+      customerWaId,
+      pending: [],
+      turns: [],
+      seenIds: [],
+      pausedUntil: 0,
+      ownerTookOver: false,
+    };
+    const scope = scopeOf(state);
+    const approval = (await callAgentTool(this.env, scope, "get_approval", { approval_id: approvalId })) as ApprovalView;
+    const update = approval && !approval.error ? describeApproval(approval) : null;
+    if (!update) return;
+    const agent = await loadContext(this.env, scope);
+    if (!agent) return;
+
+    const t0 = Date.now();
+    const result = await runAgent(
+      this.env,
+      { env: this.env, scope, agent, customerName: state.customerName, now: new Date() },
+      state.turns,
+      { firstContact: false, resumed: false, update },
+    );
+    if (!result.text) return;
+    let wamid: string | undefined;
+    if (isOn(this.env.DRY_RUN)) console.log(JSON.stringify({ evt: "dry_run_reply", to: maskWaId(customerWaId), text: result.text }));
+    else wamid = ((await sendText(this.env, phoneNumberId, customerWaId, result.text)) as { messages?: { id: string }[] }).messages?.[0]?.id;
+
+    const fresh = (await this.load()) ?? state;
+    fresh.turns = [...fresh.turns, { role: "agent" as const, text: result.text, at: Date.now() }].slice(
+      -intVar(this.env.MAX_INPUT_MESSAGES, 20),
+    );
+    await this.save(fresh);
+    await this.logMessages(fresh, [{ direction: "out", kind: "text", body: result.text, wamid, at: Date.now() }]);
+    console.log(
+      JSON.stringify({
+        evt: "approval_notified",
+        chat: chatKey(state),
+        status: approval.status,
+        total_ms: Date.now() - t0,
+        tools: result.tools,
+      }),
+    );
+  }
+
   private async customerText(message: WaMessage): Promise<string> {
     if (message.type === "audio" && message.audio) {
       try {
@@ -238,6 +286,39 @@ function messageText(m: WaMessage): string | null {
 
 const chatKey = (s: { phoneNumberId: string; customerWaId: string }) =>
   `${s.phoneNumberId}:${maskWaId(s.customerWaId)}`;
+
+type ApprovalView = {
+  error?: string;
+  kind: "new_booking" | "reschedule" | "cancel";
+  status: "pending" | "approved" | "rejected" | "failed";
+  outcome: "slot_taken" | "out_of_hours" | "booking_gone" | "error" | null;
+  service: string | null;
+  when: string | null;
+  staff: string | null;
+  location: string | null;
+};
+
+// What the model is told happened. null ⇒ nothing to tell (still pending).
+function describeApproval(a: ApprovalView): string | null {
+  const what = [a.service, a.when, a.staff && `with ${a.staff}`, a.location && `at ${a.location}`].filter(Boolean).join(", ");
+  if (a.status === "approved") {
+    if (a.kind === "new_booking") return `the business confirmed the booking (${what}). Tell the customer it is confirmed.`;
+    if (a.kind === "reschedule") return `the business confirmed moving the booking to the new time (${what}). Tell the customer.`;
+    return `the business confirmed the cancellation (${what}). Tell the customer it is cancelled.`;
+  }
+  if (a.status === "rejected") {
+    return `the business could not accept the customer's request (${a.kind.replace("_", " ")}: ${what}). Apologise briefly${
+      a.kind === "cancel" ? " and say someone will be in touch" : " and offer to find another time"
+    }. Don't give a reason.`;
+  }
+  if (a.status === "failed") {
+    if (a.outcome === "slot_taken" || a.outcome === "out_of_hours") {
+      return `the requested time (${a.when}) is no longer available. Apologise and offer to check other times.`;
+    }
+    return `the business could not complete the request (${what}). Apologise and say someone will follow up.`;
+  }
+  return null;
+}
 
 const scopeOf = (s: ChatState): AgentScope => ({ phoneNumberId: s.phoneNumberId, customerWaId: s.customerWaId });
 

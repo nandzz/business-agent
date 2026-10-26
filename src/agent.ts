@@ -40,6 +40,7 @@ function instructions(ctx: ToolContext, opts: { firstContact: boolean; resumed: 
     "- Complaints, refunds, medical or sensitive topics, or anything you're unsure about: hand_off, then tell the customer someone will reply soon.",
     "- Voice notes arrive as transcripts marked [voice note].",
     "- Lines marked (owner) were written by the business owner from their phone: treat them as the business speaking, never contradict them.",
+    "- A developer message starting with \"Business update:\" comes from the booking system, not the customer: tell the customer about it.",
   ];
   // The WhatsApp profile name is set by the customer: untrusted. One line,
   // capped, JSON-quoted and labelled as data, never as instructions.
@@ -74,10 +75,11 @@ export async function runAgent(
   env: Env,
   ctx: ToolContext,
   turns: Turn[],
-  opts: { firstContact: boolean; resumed: boolean },
+  opts: { firstContact: boolean; resumed: boolean; update?: string },
 ): Promise<AgentResult> {
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
   const items: ResponseInputItem[] = toInput(turns);
+  if (opts.update) items.push({ role: "developer", content: `Business update: ${opts.update}` });
   const result: AgentResult = { text: null, tools: [], inputTokens: 0, outputTokens: 0 };
   const system = instructions(ctx, opts);
 
