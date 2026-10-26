@@ -14,8 +14,9 @@ export type AgentContext = {
   agentName: string;
   agentIntro: string;
   autonomy: { new_booking: Autonomy; reschedule: Autonomy; cancel: Autonomy };
-  // null ⇒ the agent works around the clock.
-  agentHours: AvailabilityWindows | null;
+  // When the team answers on WhatsApp (agent_hours). The agent replies at any
+  // time; these only tell it when a person is around. null ⇒ not set.
+  teamHours: AvailabilityWindows | null;
   takeoverPauseMin: number;
   // null ⇒ no bookable calendar (widget off or not in the plan): answer only.
   calendar: CalendarConfig | null;
@@ -50,7 +51,7 @@ export async function loadContext(env: Env, scope: AgentScope): Promise<AgentCon
     agentName: raw.settings.agent_name,
     agentIntro: raw.settings.agent_intro || `the virtual assistant of ${raw.business.name}`,
     autonomy: raw.settings.autonomy,
-    agentHours: raw.settings.agent_hours,
+    teamHours: raw.settings.agent_hours,
     takeoverPauseMin: raw.settings.takeover_pause_min,
     calendar,
     timezone: calendar?.timezone || "Europe/Rome",

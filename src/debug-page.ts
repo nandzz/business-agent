@@ -128,7 +128,7 @@ async function refresh(wait) {
     data = json;
     version = json.version;
     fetchedAt = Date.now();
-    const why = { agent_disabled: "the agent is switched off (My Agent header switch)", outside_hours: "outside the agent's working hours", not_connected: "this phone_number_id has no active WhatsApp connection" };
+    const why = { agent_disabled: "the agent is switched off (My Agent header switch)", not_connected: "this phone_number_id has no active WhatsApp connection" };
     $("cErr").textContent = data.dryRun ? "DRY_RUN=1: the agent's replies are only logged. Set DRY_RUN=0 in .dev.vars."
       : data.lastSkip ? "No reply: " + (why[data.lastSkip.reason] || data.lastSkip.reason) + "." : "";
   } catch (e) {
