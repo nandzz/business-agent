@@ -1,12 +1,14 @@
 // One Durable Object per chat (business number × customer). It debounces a
 // burst of messages into one agent run and guarantees a chat is never processed
-// twice at once (a DO runs one alarm at a time). In the spike it also keeps the
-// last turns; later those live in Supabase and this only holds the queue.
+// twice at once (a DO runs one alarm at a time). It keeps the last turns as the
+// model's working context; the conversation of record lives in Supabase
+// (agent_messages, written through mcp-agent).
 import { DurableObject } from "cloudflare:workers";
 import { minutesOf, todayInZone, weekdayOf } from "@/features/booking/domain/calendar";
 import { runAgent, transcribe, type Turn } from "./agent";
+import { loadContext, type AgentContext } from "./context";
 import { intVar, isOn, maskWaId, type Env } from "./env";
-import { businessFor, type Business } from "./fixture";
+import { callAgentTool, type AgentScope } from "./mcp";
 import { downloadMedia, markReadAndTyping, sendText, type InboundEvent, type WaMessage } from "./meta";
 
 type Pending = { message: WaMessage; receivedAt: number };
@@ -21,7 +23,11 @@ type ChatState = {
   pausedUntil: number;
   // Set when the owner typed in the chat; the next run may stay silent.
   ownerTookOver: boolean;
+  // The business's takeover pause, remembered from the last run's context.
+  takeoverPauseMin?: number;
 };
+
+type LoggedMessage = { direction: "in" | "out" | "owner"; kind: "text" | "voice" | "other"; body: string; wamid?: string; at: number };
 
 const SEEN_KEEP = 100;
 
@@ -52,7 +58,13 @@ export class ChatQueue extends DurableObject<Env> {
     if (event.kind === "owner_echo") {
       const text = messageText(event.message);
       if (text) state.turns.push({ role: "owner", text, at: now });
-      state.pausedUntil = now + intVar(this.env.TAKEOVER_PAUSE_MIN, 5) * 60_000;
+      const pauseMin = state.takeoverPauseMin ?? intVar(this.env.TAKEOVER_PAUSE_MIN, 5);
+      state.pausedUntil = now + pauseMin * 60_000;
+      this.ctx.waitUntil(
+        this.logMessages(state, [
+          { direction: "owner", kind: text ? "text" : "other", body: text ?? `[${event.message.type}]`, wamid: event.message.id, at: now },
+        ]),
+      );
       state.ownerTookOver = true;
       await this.save(state);
       if (state.pending.length) await this.ctx.storage.setAlarm(state.pausedUntil);
@@ -81,18 +93,31 @@ export class ChatQueue extends DurableObject<Env> {
       return;
     }
 
-    const business = businessFor(state.phoneNumberId);
-    if (!withinAgentHours(business, new Date(now))) {
-      // Outside working hours the agent stays silent; the owner answers.
-      console.log(JSON.stringify({ evt: "outside_hours", chat: chatKey(state) }));
-      state.pending = [];
-      await this.save(state);
+    let agent: AgentContext | null;
+    try {
+      agent = await loadContext(this.env, scopeOf(state));
+    } catch (err) {
+      // Supabase unreachable: keep the messages and retry shortly.
+      console.error(JSON.stringify({ evt: "context_failed", chat: chatKey(state), err: String(err) }));
+      await this.ctx.storage.setAlarm(now + 30_000);
       return;
     }
+    // Not a connected number, agent switched off, or outside its hours: stay
+    // silent and leave the chat to the owner. Messages are still recorded.
+    const skip = !agent ? "not_connected" : !agent.enabled ? "agent_disabled" : !withinAgentHours(agent, new Date(now)) ? "outside_hours" : null;
+    if (skip || !agent) {
+      console.log(JSON.stringify({ evt: skip, chat: chatKey(state) }));
+      const skipped = state.pending;
+      state.pending = [];
+      await this.save(state);
+      if (agent) await this.logMessages(state, skipped.map((p) => inboundLog(p.message, messageText(p.message) ?? `[${p.message.type}]`, p.receivedAt)));
+      return;
+    }
+    state.takeoverPauseMin = agent.takeoverPauseMin;
 
     // Take the batch out first: messages arriving mid-run wait for the next alarm.
     const batch = state.pending;
-    const firstContact = !state.turns.some((t) => t.role === "agent");
+    const firstContact = agent.firstContact && !state.turns.some((t) => t.role === "agent");
     const resumed = state.ownerTookOver;
     state.pending = [];
     state.ownerTookOver = false;
@@ -102,6 +127,7 @@ export class ChatQueue extends DurableObject<Env> {
     const dryRun = isOn(this.env.DRY_RUN);
     const maxTurns = intVar(this.env.MAX_INPUT_MESSAGES, 20);
     const newTurns: Turn[] = [];
+    const logged: LoggedMessage[] = [];
     try {
       const last = batch[batch.length - 1].message;
       if (!dryRun) {
@@ -111,8 +137,10 @@ export class ChatQueue extends DurableObject<Env> {
       }
 
       const t0 = Date.now();
-      for (const { message } of batch) {
-        newTurns.push({ role: "customer", text: await this.customerText(message), at: now });
+      for (const { message, receivedAt } of batch) {
+        const text = await this.customerText(message);
+        newTurns.push({ role: "customer", text, at: now });
+        logged.push(inboundLog(message, text, receivedAt));
       }
       timings.transcribe_ms = Date.now() - t0;
 
@@ -121,7 +149,7 @@ export class ChatQueue extends DurableObject<Env> {
       const t1 = Date.now();
       const result = await runAgent(
         this.env,
-        { business, customerWaId: state.customerWaId, customerName: state.customerName, now: new Date(now) },
+        { env: this.env, scope: scopeOf(state), agent, customerName: state.customerName, now: new Date(now) },
         turns,
         { firstContact, resumed },
       );
@@ -129,9 +157,11 @@ export class ChatQueue extends DurableObject<Env> {
 
       const t2 = Date.now();
       if (result.text) {
+        let wamid: string | undefined;
         if (dryRun) console.log(JSON.stringify({ evt: "dry_run_reply", to: maskWaId(state.customerWaId), text: result.text }));
-        else await sendText(this.env, state.phoneNumberId, state.customerWaId, result.text);
+        else wamid = ((await sendText(this.env, state.phoneNumberId, state.customerWaId, result.text)) as { messages?: { id: string }[] }).messages?.[0]?.id;
         turns.push({ role: "agent", text: result.text, at: Date.now() });
+        logged.push({ direction: "out", kind: "text", body: result.text, wamid, at: Date.now() });
       }
       timings.send_ms = Date.now() - t2;
 
@@ -139,6 +169,7 @@ export class ChatQueue extends DurableObject<Env> {
       const fresh = (await this.load()) ?? state;
       fresh.turns = turns.slice(-maxTurns);
       await this.save(fresh);
+      await this.logMessages(state, logged);
 
       console.log(
         JSON.stringify({
@@ -162,6 +193,17 @@ export class ChatQueue extends DurableObject<Env> {
       const fresh = (await this.load()) ?? state;
       fresh.turns = [...fresh.turns, ...newTurns].slice(-maxTurns);
       await this.save(fresh);
+      await this.logMessages(state, logged);
+    }
+  }
+
+  // Best effort: a failed log never blocks or repeats a reply.
+  private async logMessages(state: ChatState, messages: LoggedMessage[]) {
+    if (messages.length === 0) return;
+    try {
+      await callAgentTool(this.env, scopeOf(state), "log_messages", { messages, customer_name: state.customerName ?? null });
+    } catch (err) {
+      console.error(JSON.stringify({ evt: "log_messages_failed", chat: chatKey(state), err: String(err) }));
     }
   }
 
@@ -197,10 +239,20 @@ function messageText(m: WaMessage): string | null {
 const chatKey = (s: { phoneNumberId: string; customerWaId: string }) =>
   `${s.phoneNumberId}:${maskWaId(s.customerWaId)}`;
 
-function withinAgentHours(business: Business, now: Date): boolean {
-  if (!business.agentHours) return true;
-  const tz = business.calendar.timezone;
-  const windows = business.agentHours[weekdayOf(todayInZone(tz, now))] ?? [];
+const scopeOf = (s: ChatState): AgentScope => ({ phoneNumberId: s.phoneNumberId, customerWaId: s.customerWaId });
+
+const inboundLog = (m: WaMessage, text: string, at: number): LoggedMessage => ({
+  direction: "in",
+  kind: m.type === "audio" ? "voice" : m.type === "text" ? "text" : "other",
+  body: text,
+  wamid: m.id,
+  at,
+});
+
+function withinAgentHours(agent: AgentContext, now: Date): boolean {
+  if (!agent.agentHours) return true;
+  const tz = agent.timezone;
+  const windows = agent.agentHours[weekdayOf(todayInZone(tz, now))] ?? [];
   const hhmm = new Intl.DateTimeFormat("en-GB", {
     timeZone: tz,
     hour: "2-digit",

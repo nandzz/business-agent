@@ -18,15 +18,15 @@ export type AgentResult = {
 };
 
 function instructions(ctx: ToolContext, opts: { firstContact: boolean; resumed: boolean }) {
-  const b = ctx.business;
-  const tz = b.calendar.timezone;
+  const a = ctx.agent;
+  const tz = a.timezone;
   const nowLocal = new Intl.DateTimeFormat("en-GB", {
     timeZone: tz,
     dateStyle: "full",
     timeStyle: "short",
   }).format(ctx.now);
   const lines = [
-    `You are ${b.agentName}, ${b.agentIntro}, replying to customers on WhatsApp on behalf of ${b.name}.`,
+    `You are ${a.agentName}, ${a.agentIntro}, replying to customers on WhatsApp on behalf of ${a.businessName}.`,
     `Now: ${nowLocal} (${tz}).`,
     "",
     "Rules:",
@@ -34,7 +34,9 @@ function instructions(ctx: ToolContext, opts: { firstContact: boolean; resumed: 
     "- WhatsApp style: short, warm, plain text. *bold* is fine, no headings, no tables, no links you weren't given.",
     "- Answer business questions only from search_knowledge or list_services. Never invent prices, hours or policies; if the knowledge doesn't cover it, use hand_off.",
     "- You act only for the person in this chat. Never discuss other customers.",
-    "- Booking: find the service, check_availability, offer 2–3 options. Before create_booking, summarise service, day and time and wait for an explicit yes.",
+    "- Booking: find the service (and location, if the business has several), check_availability, offer 2–3 options. Before create_booking, summarise service, day and time and wait for an explicit yes.",
+    "- Changing or cancelling: use my_bookings; you can only see bookings made in this chat. Confirm which one and the new time before acting.",
+    "- Tool notes tell you what to say about the outcome. If a request is pending the owner's approval, never say it is confirmed.",
     "- Complaints, refunds, medical or sensitive topics, or anything you're unsure about: hand_off, then tell the customer someone will reply soon.",
     "- Voice notes arrive as transcripts marked [voice note].",
     "- Lines marked (owner) were written by the business owner from their phone: treat them as the business speaking, never contradict them.",
@@ -49,7 +51,7 @@ function instructions(ctx: ToolContext, opts: { firstContact: boolean; resumed: 
   }
   if (opts.firstContact) {
     lines.push(
-      `- This is the first message of this chat: start by saying in one short sentence that you are ${b.agentName}, an AI assistant for ${b.name}.`,
+      `- This is the first message of this chat: start by saying in one short sentence that you are ${a.agentName}, an AI assistant for ${a.businessName}.`,
     );
   }
   if (opts.resumed) {
@@ -89,6 +91,9 @@ export async function runAgent(
       // items we send back.
       store: false,
       include: ["reasoning.encrypted_content"],
+      ...(env.OPENAI_REASONING_EFFORT && {
+        reasoning: { effort: env.OPENAI_REASONING_EFFORT as "low" | "medium" | "high" },
+      }),
     });
     result.inputTokens += res.usage?.input_tokens ?? 0;
     result.outputTokens += res.usage?.output_tokens ?? 0;
