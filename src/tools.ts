@@ -71,7 +71,8 @@ export const TOOL_DEFS: FunctionTool[] = [
   {
     type: "function",
     name: "my_bookings",
-    description: "The customer's upcoming bookings made in this chat (with booking_id).",
+    description:
+      "The customer's upcoming bookings (with booking_id): the ones made in this chat and any other booking at this business under their WhatsApp number (web or made by the business).",
     parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
     strict: true,
   },
