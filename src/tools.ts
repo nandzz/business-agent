@@ -14,6 +14,7 @@ import {
 import type { CalendarConfig, CalendarService, Location, StaffMember } from "@/lib/types";
 import type { AgentContext } from "./context";
 import type { Env } from "./env";
+import { embed } from "./embeddings";
 import { callAgentTool, type AgentScope } from "./mcp";
 import { MAX_PEOPLE, dayAvailability } from "./availability";
 import { serviceMenu } from "./menu";
@@ -33,7 +34,7 @@ export const TOOL_DEFS: FunctionTool[] = [
     type: "function",
     name: "search_knowledge",
     description:
-      "Search the business's knowledge (address, hours, prices, policies, FAQs). Use it before answering any factual question about the business.",
+      "Semantic search over the business's knowledge (address, hours, policies, FAQs, anything the owner wrote). Use it before answering any factual question about the business. mode=matches returns the most relevant passages; mode=all returns everything when nothing matched closely.",
     parameters: {
       type: "object",
       properties: { query: { type: "string", description: "What the customer wants to know" } },
@@ -234,8 +235,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, t
   const cal = tc.agent.calendar;
   const noBooking = { error: "online booking is not available for this business; offer to hand off" };
   switch (name) {
-    case "search_knowledge":
-      return callAgentTool(tc.env, tc.scope, "search_knowledge", { query: String(args.query ?? "") });
+    case "search_knowledge": {
+      const query = String(args.query ?? "");
+      return callAgentTool(tc.env, tc.scope, "search_knowledge", { query, embedding: await embed(tc.env, query) });
+    }
 
     case "list_services":
       return cal ? serviceMenu(cal) : noBooking;

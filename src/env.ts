@@ -21,6 +21,8 @@ export interface Env {
   MCP_AGENT_URL: string;
   OPENAI_MODEL: string;
   OPENAI_TRANSCRIBE_MODEL: string;
+  // Must match the portal's document embeddings (embed-document edge function).
+  OPENAI_EMBEDDING_MODEL: string;
   // Optional: low | medium | high. Empty ⇒ the model's default.
   OPENAI_REASONING_EFFORT: string;
   DEBOUNCE_MS: string;
