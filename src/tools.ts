@@ -6,7 +6,6 @@
 // webhook via ToolContext, never from the model's arguments.
 import type { FunctionTool } from "openai/resources/responses/responses";
 import {
-  computeSegmentedSlots,
   eligibleStaffForServices,
   resolveSegmentPlan,
   todayInZone,
@@ -16,6 +15,7 @@ import type { CalendarConfig, CalendarService, Location, StaffMember } from "@/l
 import type { AgentContext } from "./context";
 import type { Env } from "./env";
 import { callAgentTool, type AgentScope } from "./mcp";
+import { dayAvailability } from "./availability";
 import { serviceMenu } from "./menu";
 
 export type ToolContext = {
@@ -54,18 +54,17 @@ export const TOOL_DEFS: FunctionTool[] = [
     type: "function",
     name: "check_availability",
     description:
-      "The free start times for one or more services booked together, each with the staff free then. The only source of truth for availability. Dates are in the business's timezone (YYYY-MM-DD).",
+      "Every free start time on ONE day for one or more services booked together, grouped into morning/afternoon/evening, each with the staff free then. If the day is full it lists the next days with room. The only source of truth for availability.",
     parameters: {
       type: "object",
       properties: {
         service_ids: { type: "array", items: { type: "string" } },
         location_id: nullable("string", "Required when the business has locations"),
         staff_id: nullable("string", "Only when the customer asked for a specific person: a staff id from list_services"),
-        from_date: nullable("string", "First day to check; null = today"),
-        days: nullable("integer", "How many days to check (1 to 14); null = 7"),
+        date: { type: "string", description: "The day the customer chose, YYYY-MM-DD in the business's timezone" },
         rescheduling_booking_id: nullable("string", "When moving a booking: its booking_id, so its current time doesn't count as busy"),
       },
-      required: ["service_ids", "location_id", "staff_id", "from_date", "days", "rescheduling_booking_id"],
+      required: ["service_ids", "location_id", "staff_id", "date", "rescheduling_booking_id"],
       additionalProperties: false,
     },
     strict: true,
@@ -193,15 +192,6 @@ function choicesFor(scope: Scope, serviceIds: unknown, staffId: unknown): Servic
   return services.map((service) => ({ service, staffId: wanted }));
 }
 
-// Who is free at a slot: staff names per service (empty ⇒ no staff needed).
-function freeStaffAt(cal: CalendarConfig, scope: Scope, choices: ServiceChoice[], start: string, busy: unknown[]) {
-  const plan = resolveSegmentPlan({ config: cal, choices, startIso: start, existingBusy: busy as never, location: scope.location });
-  if (!plan.ok) return null;
-  return Object.fromEntries(
-    plan.segments.map((seg) => [seg.name, seg.staff_ids.map((id) => scope.staffNames.get(id) ?? id)]),
-  );
-}
-
 async function busyFor(tc: ToolContext, scope: Scope, fromDate: string, days: number, excludeBookingId?: string) {
   const from = new Date(new Date(`${fromDate}T00:00:00Z`).getTime() - 86_400_000).toISOString();
   const to = new Date(new Date(`${fromDate}T00:00:00Z`).getTime() + (days + 2) * 86_400_000).toISOString();
@@ -255,36 +245,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, t
       if ("error" in scope) return scope;
       const choices = choicesFor(scope, args.service_ids, args.staff_id);
       if ("error" in choices) return choices;
-      const days = Math.min(14, Math.max(1, Number(args.days ?? 7) || 7));
-      const fromDate =
-        typeof args.from_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(args.from_date)
-          ? args.from_date
-          : todayInZone(scope.timezone, tc.now);
+      const date = typeof args.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(args.date) ? args.date : null;
+      if (!date) return { error: "date required", note: "Ask the customer which day they'd like." };
+      if (date < todayInZone(scope.timezone, tc.now)) return { error: "date is in the past", note: "Ask for a day from today on." };
       const moving = typeof args.rescheduling_booking_id === "string" ? args.rescheduling_booking_id : undefined;
-      const busy = await busyFor(tc, scope, fromDate, days, moving);
-      const slots = computeSegmentedSlots({
-        config: cal,
-        choices,
-        fromDate,
-        days,
-        existingBusy: busy,
-        now: tc.now,
-        minLeadMinutes: 60,
-        location: scope.location,
-      });
-      const shown = slots.slice(0, 16).map((s) => ({
-        start: s.start,
-        label: fmtSlot(s.start, scope.timezone),
-        free_staff: freeStaffAt(cal, scope, choices, s.start, busy),
-      }));
-      return {
-        timezone: scope.timezone,
-        total: slots.length,
-        slots: shown,
-        note: shown.length
-          ? "Offer only these times, with the staff listed for each."
-          : "No free times in this range. Say so and offer to check other days.",
-      };
+      // The asked day plus two weeks, so a full day can point to the next free ones.
+      const busy = await busyFor(tc, scope, date, 15, moving);
+      return dayAvailability({ cal, scope, choices, date, busy, now: tc.now });
     }
 
     case "my_bookings":
