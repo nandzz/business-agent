@@ -1,5 +1,6 @@
 // The /debug/whatsapp page: a customer phone and the business's WhatsApp Business
-// app side by side. Plain HTML + JS, no build step; polls /debug/whatsapp/api/chat.
+// app side by side. Plain HTML + JS, no build step; long-polls /debug/whatsapp/api/chat
+// (one request per change or per 25 s, none while the tab is hidden).
 export const DEBUG_PAGE = /* html */ `<!doctype html>
 <html lang="en">
 <head>
@@ -86,7 +87,7 @@ const randomWa = () => "39333" + String(Math.floor(Math.random() * 1e7)).padStar
 $("pn").value = store.get("pn", "TEST_PHONE_NUMBER_ID");
 $("wa").value = store.get("wa", randomWa());
 $("name").value = store.get("name", "Giulia");
-for (const k of ["pn", "wa", "name"]) $(k).addEventListener("change", () => { store.set(k, $(k).value.trim()); last = ""; refresh(); });
+for (const k of ["pn", "wa", "name"]) $(k).addEventListener("change", () => { store.set(k, $(k).value.trim()); last = ""; kick(); });
 
 const q = () => "pn=" + encodeURIComponent($("pn").value.trim()) + "&wa=" + encodeURIComponent($("wa").value.trim());
 const time = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -112,20 +113,29 @@ function render(el, html) {
 
 let last = "";
 let data = null;
-async function refresh() {
+let version = 0;
+let inflight = null;
+async function refresh(wait) {
   const name = $("name").value.trim() || "Customer";
   $("custName").textContent = name;
   $("custAvatar").textContent = name[0].toUpperCase();
   $("bSub").textContent = "+" + $("wa").value.trim();
   try {
-    const res = await fetch("/debug/whatsapp/api/chat?" + q());
+    inflight = new AbortController();
+    const res = await fetch("/debug/whatsapp/api/chat?" + q() + (wait && version ? "&v=" + version : ""), { signal: inflight.signal });
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || res.status);
     data = json;
+    version = json.version;
+    fetchedAt = Date.now();
     const why = { agent_disabled: "the agent is switched off (My Agent header switch)", outside_hours: "outside the agent's working hours", not_connected: "this phone_number_id has no active WhatsApp connection" };
     $("cErr").textContent = data.dryRun ? "DRY_RUN=1: the agent's replies are only logged. Set DRY_RUN=0 in .dev.vars."
       : data.lastSkip ? "No reply: " + (why[data.lastSkip.reason] || data.lastSkip.reason) + "." : "";
-  } catch (e) { $("cErr").textContent = String(e.message || e); return; }
+  } catch (e) {
+    if (e.name === "AbortError") return true;
+    $("cErr").textContent = String(e.message || e);
+    return false;
+  } finally { inflight = null; }
   const key = JSON.stringify([data.messages, data.typing]);
   if (key !== last) {
     last = key;
@@ -136,6 +146,7 @@ async function refresh() {
   $("cSub").textContent = data.typing ? "typing…" : data.pending ? "online · " + data.pending + " waiting" : "online";
   $("cSub").className = "sub" + (data.typing ? " typing" : "");
   tickPause();
+  return true;
 }
 
 function tickPause() {
@@ -149,7 +160,21 @@ function tickPause() {
   } else b.style.display = "none";
 }
 let fetchedAt = Date.now();
-const loop = async () => { fetchedAt = Date.now(); await refresh(); setTimeout(loop, 800); };
+setInterval(tickPause, 1000);
+// Long-poll while the tab is visible; back off on errors.
+let looping = false;
+async function loop() {
+  if (looping) return;
+  looping = true;
+  while (!document.hidden) {
+    const ok = await refresh(true);
+    if (!ok) await new Promise((r) => setTimeout(r, 3000));
+  }
+  looping = false;
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { kick(); loop(); } });
+// Something changed on our side: drop the waiting request so the loop refetches now.
+function kick() { version = 0; if (inflight) inflight.abort(); else if (!looping) refresh(false); }
 loop();
 
 async function post(path, body, errEl, type = "application/json") {
@@ -157,7 +182,9 @@ async function post(path, body, errEl, type = "application/json") {
   const res = await fetch(path + "?" + q() + "&name=" + encodeURIComponent($("name").value.trim()), { method: "POST", headers: { "content-type": type }, body });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) errEl.textContent = json.error || ("webhook " + (json.webhook || res.status));
-  refresh();
+  kick();
+  // The takeover pause and queue count land just after the webhook returns.
+  setTimeout(kick, 1500);
 }
 
 $("cForm").addEventListener("submit", (e) => {
@@ -172,11 +199,11 @@ $("bForm").addEventListener("submit", (e) => {
   $("bText").value = "";
   post("/debug/whatsapp/api/send", JSON.stringify({ text, as: "owner" }), $("bErr"));
 });
-$("newCustomer").addEventListener("click", () => { $("wa").value = randomWa(); store.set("wa", $("wa").value); last = ""; refresh(); });
+$("newCustomer").addEventListener("click", () => { $("wa").value = randomWa(); store.set("wa", $("wa").value); last = ""; kick(); });
 $("reset").addEventListener("click", async () => {
   if (!confirm("Reset this chat?")) return;
   await fetch("/debug/whatsapp/api/reset?" + q(), { method: "POST" });
-  last = ""; refresh();
+  last = ""; kick();
 });
 
 // Voice notes: click to start, click again to send.

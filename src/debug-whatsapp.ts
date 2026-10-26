@@ -23,6 +23,8 @@ export type DebugMessage = {
 };
 
 const TYPING_MS = 25_000;
+// The page long-polls: a request waits up to this long for the chat to change.
+const LONG_POLL_MS = 25_000;
 const KEEP_PER_CHAT = 300;
 // SQLite-backed DO values are capped at 2 MB; a minute of opus is ~100 KB.
 const MAX_MEDIA_BYTES = 1_900_000;
@@ -32,6 +34,11 @@ const newWamid = () => `wamid.DEBUG${crypto.randomUUID().replaceAll("-", "")}`;
 
 export class DebugWhatsApp extends DurableObject<Env> {
   private sql: SqlStorage;
+  // Per-chat change counter for long polling. In memory only: it starts from
+  // the boot time, so after a restart every page refetches once.
+  private versions = new Map<string, number>();
+  private waiters = new Map<string, Set<() => void>>();
+  private readonly boot = Date.now();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -57,6 +64,7 @@ export class DebugWhatsApp extends DurableObject<Env> {
       wamid, pn, wa, direction, kind, body, Date.now(),
     );
     if (direction !== "in") this.sql.exec("DELETE FROM typing WHERE pn = ? AND wa = ?", pn, wa);
+    this.changed(pn, wa);
     this.sql.exec(
       "DELETE FROM messages WHERE pn = ? AND wa = ? AND seq <= (SELECT seq FROM messages WHERE pn = ? AND wa = ? ORDER BY seq DESC LIMIT 1 OFFSET ?)",
       pn, wa, pn, wa, KEEP_PER_CHAT,
@@ -76,6 +84,7 @@ export class DebugWhatsApp extends DurableObject<Env> {
       if (body.typing_indicator) {
         this.sql.exec("INSERT OR REPLACE INTO typing (pn, wa, until) VALUES (?, ?, ?)", pn, row.wa, Date.now() + TYPING_MS);
       }
+      this.changed(pn, row.wa);
       return { handled: true, result: { success: true } };
     }
     const to = typeof body.to === "string" ? body.to : "";
@@ -98,17 +107,52 @@ export class DebugWhatsApp extends DurableObject<Env> {
     return { bytes: row.bytes, mimeType: row.mime };
   }
 
-  chat(pn: string, wa: string): { messages: DebugMessage[]; typing: boolean } {
+  private version(pn: string, wa: string) {
+    return this.versions.get(`${pn}:${wa}`) ?? this.boot;
+  }
+
+  // Anything the page shows changed: bump the version and wake its long polls.
+  changed(pn: string, wa: string) {
+    const key = `${pn}:${wa}`;
+    this.versions.set(key, this.version(pn, wa) + 1);
+    for (const wake of this.waiters.get(key) ?? []) wake();
+    this.waiters.delete(key);
+  }
+
+  // Returns at once if the page's version is stale, else when the chat changes
+  // or after LONG_POLL_MS.
+  async waitChat(pn: string, wa: string, seen: number): Promise<{ messages: DebugMessage[]; typing: boolean; version: number }> {
+    if (seen === this.version(pn, wa)) {
+      const key = `${pn}:${wa}`;
+      await new Promise<void>((resolve) => {
+        const set = this.waiters.get(key) ?? new Set();
+        const timer = setTimeout(() => {
+          set.delete(wake);
+          resolve();
+        }, LONG_POLL_MS);
+        const wake = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        set.add(wake);
+        this.waiters.set(key, set);
+      });
+    }
+    return this.chat(pn, wa);
+  }
+
+  chat(pn: string, wa: string): { messages: DebugMessage[]; typing: boolean; version: number } {
     const messages = this.sql
       .exec<DebugMessage>("SELECT seq, wamid, direction, kind, body, status, at FROM messages WHERE pn = ? AND wa = ? ORDER BY seq", pn, wa)
       .toArray();
     const typing = this.sql.exec<{ until: number }>("SELECT until FROM typing WHERE pn = ? AND wa = ?", pn, wa).toArray()[0];
-    return { messages, typing: Boolean(typing && typing.until > Date.now()) };
+    return { messages, typing: Boolean(typing && typing.until > Date.now()), version: this.version(pn, wa) };
   }
 
   reset(pn: string, wa: string) {
     this.sql.exec("DELETE FROM messages WHERE pn = ? AND wa = ?", pn, wa);
     this.sql.exec("DELETE FROM typing WHERE pn = ? AND wa = ?", pn, wa);
+    this.changed(pn, wa);
   }
 }
 
@@ -134,7 +178,9 @@ export async function handleDebugWhatsApp(
   const api = url.pathname.slice("/debug/whatsapp/api/".length);
 
   if (api === "chat" && request.method === "GET") {
-    const [chat, state] = await Promise.all([phone.chat(pn, wa), env.CHAT.getByName(chatName(pn, wa)).inspect()]);
+    const seen = Number(url.searchParams.get("v"));
+    const chat = await (Number.isFinite(seen) && seen > 0 ? phone.waitChat(pn, wa, seen) : phone.chat(pn, wa));
+    const state = await env.CHAT.getByName(chatName(pn, wa)).inspect();
     return Response.json({
       ...chat,
       pausedUntil: state?.pausedUntil ?? 0,
