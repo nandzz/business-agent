@@ -1,10 +1,10 @@
 import type { ChatQueue } from "./chat";
-import type { MockWhatsApp } from "./mock";
+import type { DebugWhatsApp } from "./debug-whatsapp";
 
 export interface Env {
   CHAT: DurableObjectNamespace<ChatQueue>;
-  // Local mock WhatsApp (MOCK_WHATSAPP=1 only).
-  MOCK: DurableObjectNamespace<MockWhatsApp>;
+  // /debug/whatsapp chats (DEBUG_ROUTES=1 only).
+  DEBUG_WHATSAPP: DurableObjectNamespace<DebugWhatsApp>;
 
   // Secrets (.dev.vars locally, `wrangler secret put` when deployed)
   META_APP_SECRET: string;
@@ -29,8 +29,6 @@ export interface Env {
   TAKEOVER_PAUSE_MIN: string;
   DRY_RUN: string;
   DEBUG_ROUTES: string;
-  // 1 ⇒ Graph calls go to the MockWhatsApp DO and /mock serves a test UI. Never in prod.
-  MOCK_WHATSAPP: string;
 }
 
 export function intVar(value: string | undefined, fallback: number): number {

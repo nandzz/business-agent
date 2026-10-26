@@ -1,11 +1,11 @@
-// The /mock test page: a customer phone and the business's WhatsApp Business
-// app side by side. Plain HTML + JS, no build step; polls /mock/api/chat.
-export const MOCK_PAGE = /* html */ `<!doctype html>
+// The /debug/whatsapp page: a customer phone and the business's WhatsApp Business
+// app side by side. Plain HTML + JS, no build step; polls /debug/whatsapp/api/chat.
+export const DEBUG_PAGE = /* html */ `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mock WhatsApp</title>
+<title>Debug WhatsApp</title>
 <style>
   :root {
     --bg: #eae6df; --panel: #f0f2f5; --chat: #efeae2; --in: #ffffff; --mine: #d9fdd3;
@@ -56,7 +56,7 @@ export const MOCK_PAGE = /* html */ `<!doctype html>
 </head>
 <body>
 <div class="bar">
-  <h1>Mock WhatsApp</h1>
+  <h1>Debug WhatsApp</h1>
   <label>Business phone_number_id <input id="pn"></label>
   <label>Customer number <input id="wa" inputmode="numeric"></label>
   <label>Customer name <input id="name"></label>
@@ -81,7 +81,7 @@ export const MOCK_PAGE = /* html */ `<!doctype html>
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
-const store = { get(k, d) { try { return localStorage.getItem("mockwa." + k) || d; } catch { return d; } }, set(k, v) { try { localStorage.setItem("mockwa." + k, v); } catch {} } };
+const store = { get(k, d) { try { return localStorage.getItem("debugwa." + k) || d; } catch { return d; } }, set(k, v) { try { localStorage.setItem("debugwa." + k, v); } catch {} } };
 const randomWa = () => "39333" + String(Math.floor(Math.random() * 1e7)).padStart(7, "0");
 $("pn").value = store.get("pn", "TEST_PHONE_NUMBER_ID");
 $("wa").value = store.get("wa", randomWa());
@@ -97,7 +97,7 @@ function bubble(m, side) {
   const mine = side === "customer" ? m.direction === "in" : m.direction !== "in";
   const tag = m.direction === "out" ? "Agent" : m.direction === "owner" ? (side === "business" ? "You" : "") : "";
   const body = m.kind === "voice"
-    ? '<audio controls preload="none" src="/mock/api/media?' + q() + "&id=" + encodeURIComponent(m.body) + '"></audio>'
+    ? '<audio controls preload="none" src="/debug/whatsapp/api/media?' + q() + "&id=" + encodeURIComponent(m.body) + '"></audio>'
     : esc(m.body);
   const ticks = m.direction === "in" && side === "customer" ? ' <span class="tk ' + (m.status === "read" ? "read" : "") + '">✓✓</span>' : "";
   return '<div class="b' + (mine ? " mine" : "") + '">' + (tag ? '<span class="tag">' + tag + "</span>" : "") + body +
@@ -118,11 +118,11 @@ async function refresh() {
   $("custAvatar").textContent = name[0].toUpperCase();
   $("bSub").textContent = "+" + $("wa").value.trim();
   try {
-    const res = await fetch("/mock/api/chat?" + q());
+    const res = await fetch("/debug/whatsapp/api/chat?" + q());
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || res.status);
     data = json;
-    $("cErr").textContent = "";
+    $("cErr").textContent = data.dryRun ? "DRY_RUN=1: the agent's replies are only logged. Set DRY_RUN=0 in .dev.vars." : "";
   } catch (e) { $("cErr").textContent = String(e.message || e); return; }
   const key = JSON.stringify([data.messages, data.typing]);
   if (key !== last) {
@@ -162,18 +162,18 @@ $("cForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const text = $("cText").value.trim(); if (!text) return;
   $("cText").value = "";
-  post("/mock/api/send", JSON.stringify({ text, as: "customer", name: $("name").value.trim() }), $("cErr"));
+  post("/debug/whatsapp/api/send", JSON.stringify({ text, as: "customer", name: $("name").value.trim() }), $("cErr"));
 });
 $("bForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const text = $("bText").value.trim(); if (!text) return;
   $("bText").value = "";
-  post("/mock/api/send", JSON.stringify({ text, as: "owner" }), $("bErr"));
+  post("/debug/whatsapp/api/send", JSON.stringify({ text, as: "owner" }), $("bErr"));
 });
 $("newCustomer").addEventListener("click", () => { $("wa").value = randomWa(); store.set("wa", $("wa").value); last = ""; refresh(); });
 $("reset").addEventListener("click", async () => {
   if (!confirm("Reset this chat?")) return;
-  await fetch("/mock/api/reset?" + q(), { method: "POST" });
+  await fetch("/debug/whatsapp/api/reset?" + q(), { method: "POST" });
   last = ""; refresh();
 });
 
@@ -190,7 +190,7 @@ $("mic").addEventListener("click", async () => {
       stream.getTracks().forEach((t) => t.stop());
       const type = (rec.mimeType || "audio/webm").split(";")[0];
       rec = null; $("mic").classList.remove("rec"); $("mic").textContent = "🎤";
-      post("/mock/api/voice", new Blob(chunks, { type }), $("cErr"), type);
+      post("/debug/whatsapp/api/voice", new Blob(chunks, { type }), $("cErr"), type);
     };
     rec.start();
     $("mic").classList.add("rec"); $("mic").textContent = "■";

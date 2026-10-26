@@ -1,7 +1,7 @@
 // WhatsApp Cloud API: webhook payload shapes, signature check, and the few
 // Graph calls the worker makes (send text, mark read + typing, fetch media).
 import { isOn, type Env } from "./env";
-import { mockPhone } from "./mock";
+import { DEBUG_MEDIA_PREFIX, debugWhatsApp } from "./debug-whatsapp";
 
 export type WebhookPayload = {
   object: string;
@@ -122,7 +122,11 @@ const graph = (env: Env, path: string) =>
   `https://graph.facebook.com/${env.GRAPH_API_VERSION}/${path}`;
 
 async function graphPost(env: Env, path: string, body: Record<string, unknown>) {
-  if (isOn(env.MOCK_WHATSAPP)) return mockPhone(env).graphPost(path, body);
+  if (isOn(env.DEBUG_ROUTES)) {
+    // Chats started in /debug/whatsapp are answered there; the rest go to Meta.
+    const debug = (await debugWhatsApp(env).graphPost(path, body)) as { handled: boolean; result?: unknown };
+    if (debug.handled) return debug.result;
+  }
   const res = await fetch(graph(env, path), {
     method: "POST",
     headers: {
@@ -160,7 +164,7 @@ export async function downloadMedia(
   env: Env,
   mediaId: string,
 ): Promise<{ bytes: ArrayBuffer; mimeType: string }> {
-  if (isOn(env.MOCK_WHATSAPP)) return mockPhone(env).getMedia(mediaId);
+  if (isOn(env.DEBUG_ROUTES) && mediaId.startsWith(DEBUG_MEDIA_PREFIX)) return debugWhatsApp(env).getMedia(mediaId);
   const auth = { Authorization: `Bearer ${env.META_ACCESS_TOKEN}` };
   const metaRes = await fetch(graph(env, mediaId), { headers: auth });
   if (!metaRes.ok) throw new Error(`Graph media ${mediaId} ${metaRes.status}: ${await metaRes.text()}`);

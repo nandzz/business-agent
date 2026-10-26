@@ -136,7 +136,7 @@ export class ChatQueue extends DurableObject<Env> {
     await this.save(state);
 
     const timings: Record<string, number> = {};
-    const dryRun = isDryRun(this.env);
+    const dryRun = isOn(this.env.DRY_RUN);
     const maxTurns = intVar(this.env.MAX_INPUT_MESSAGES, 20);
     const newTurns: Turn[] = [];
     const logged: LoggedMessage[] = [];
@@ -259,7 +259,7 @@ export class ChatQueue extends DurableObject<Env> {
     );
     if (!result.text) return;
     let wamid: string | undefined;
-    if (isDryRun(this.env)) console.log(JSON.stringify({ evt: "dry_run_reply", to: maskWaId(customerWaId), text: result.text }));
+    if (isOn(this.env.DRY_RUN)) console.log(JSON.stringify({ evt: "dry_run_reply", to: maskWaId(customerWaId), text: result.text }));
     else wamid = ((await sendText(this.env, phoneNumberId, customerWaId, result.text)) as { messages?: { id: string }[] }).messages?.[0]?.id;
 
     const fresh = (await this.load()) ?? state;
@@ -297,7 +297,7 @@ export class ChatQueue extends DurableObject<Env> {
     return (await this.load()) ?? null;
   }
 
-  // Mock WhatsApp only: forget this chat's working context.
+  // Debug WhatsApp only: forget this chat's working context.
   async reset(): Promise<void> {
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
@@ -360,9 +360,6 @@ function describeApproval(a: ApprovalView): string | null {
   }
   return instruction && `${instruction}\n${details}`;
 }
-
-// The mock WhatsApp needs the real send path, so it wins over DRY_RUN.
-const isDryRun = (env: Env) => isOn(env.DRY_RUN) && !isOn(env.MOCK_WHATSAPP);
 
 const scopeOf = (s: ChatState): AgentScope => ({ phoneNumberId: s.phoneNumberId, customerWaId: s.customerWaId });
 

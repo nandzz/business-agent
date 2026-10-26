@@ -4,10 +4,10 @@
 import { isOn, type Env } from "./env";
 import { callAgentTool } from "./mcp";
 import { extractEvents, verifySignature, type WebhookPayload } from "./meta";
-import { handleMock } from "./mock";
+import { handleDebugWhatsApp } from "./debug-whatsapp";
 
 export { ChatQueue } from "./chat";
-export { MockWhatsApp } from "./mock";
+export { DebugWhatsApp } from "./debug-whatsapp";
 
 const chatName = (phoneNumberId: string, customerWaId: string) => `${phoneNumberId}:${customerWaId}`;
 
@@ -30,8 +30,8 @@ export default {
       return handleWebhook(await request.arrayBuffer(), request.headers.get("x-hub-signature-256"), env, ctx);
     }
 
-    if ((url.pathname === "/mock" || url.pathname.startsWith("/mock/")) && isOn(env.MOCK_WHATSAPP)) {
-      return handleMock(request, env, url, (raw, signature) => handleWebhook(raw, signature, env, ctx), chatName);
+    if ((url.pathname === "/debug/whatsapp" || url.pathname.startsWith("/debug/whatsapp/")) && isOn(env.DEBUG_ROUTES)) {
+      return handleDebugWhatsApp(request, env, url, (raw, signature) => handleWebhook(raw, signature, env, ctx), chatName);
     }
 
     if (url.pathname === "/internal/approval-decided" && request.method === "POST") {
