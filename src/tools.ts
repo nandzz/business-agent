@@ -334,6 +334,9 @@ function withNote(result: { status?: string; error?: string }, timezone?: string
     case "not_allowed":
       return { ...result, note: "This isn't possible through chat: offer to hand off to the business." };
     default:
-      return result;
+      // A booking error from the database (SLOT_TAKEN, OUT_OF_HOURS, …): nothing was done.
+      return result?.error
+        ? { ...result, note: "Nothing was booked, moved or cancelled. Tell the customer; for a new time, check_availability again and offer other times." }
+        : result;
   }
 }

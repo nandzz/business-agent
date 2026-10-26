@@ -7,7 +7,9 @@ import { NO_REPLY, buildInstructions } from "./prompt";
 import { cleanReply } from "./reply";
 import { TOOL_DEFS, executeTool, type ToolContext } from "./tools";
 
-const MAX_ROUNDS = 5;
+// Group bookings take a check plus one create_booking per person. The last
+// round allows no tools, so a run always ends with a reply.
+const MAX_ROUNDS = 8;
 
 export type Turn = { role: "customer" | "agent" | "owner"; text: string; at: number };
 
@@ -44,6 +46,7 @@ export async function runAgent(
       instructions: system,
       input: items,
       tools: TOOL_DEFS,
+      ...(round === MAX_ROUNDS - 1 && { tool_choice: "none" as const }),
       // Nothing kept on OpenAI's side; reasoning state travels encrypted in the
       // items we send back.
       store: false,

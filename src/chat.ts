@@ -29,11 +29,20 @@ type ChatState = {
   pendingApprovals?: string[];
   // Why the last batch got no reply (shown in /debug/whatsapp); cleared on a run.
   lastSkip?: { reason: string; at: number };
+  // The batch of a run that hasn't finished. Kept until the run's turns are
+  // saved: if the run dies (deploy, eviction, crash) the watchdog alarm runs
+  // it again, so a customer message is never silently dropped.
+  inflight?: { batch: Pending[]; attempts: number };
 };
 
 type LoggedMessage = { direction: "in" | "out" | "owner"; kind: "text" | "voice" | "other"; body: string; wamid?: string; at: number };
 
 const SEEN_KEEP = 100;
+// A run still unfinished after this is presumed dead and the alarm retries it.
+const RUN_WATCHDOG_MS = 120_000;
+const RETRY_DELAY_MS = 5_000;
+// After this many failed runs of the same batch the chat goes to the owner.
+const MAX_RUN_ATTEMPTS = 3;
 
 export class ChatQueue extends DurableObject<Env> {
   private async load(): Promise<ChatState | undefined> {
@@ -93,7 +102,7 @@ export class ChatQueue extends DurableObject<Env> {
     if (!state) return;
     const now = Date.now();
     if (now < state.pausedUntil) {
-      if (state.pending.length || state.pendingApprovals?.length) await this.ctx.storage.setAlarm(state.pausedUntil);
+      if (state.pending.length || state.inflight || state.pendingApprovals?.length) await this.ctx.storage.setAlarm(state.pausedUntil);
       return;
     }
     // Owner decisions deferred by a takeover pause.
@@ -105,7 +114,7 @@ export class ChatQueue extends DurableObject<Env> {
       // Those runs saved new turns: continue from fresh state.
       return this.alarm();
     }
-    if (state.pending.length === 0) return;
+    if (state.pending.length === 0 && !state.inflight) return;
 
     let agent: AgentContext | null;
     try {
@@ -121,8 +130,9 @@ export class ChatQueue extends DurableObject<Env> {
     if (!agent || !agent.enabled) {
       const reason = agent ? "agent_disabled" : "not_connected";
       console.log(JSON.stringify({ evt: reason, chat: chatKey(state) }));
-      const skipped = state.pending;
+      const skipped = [...(state.inflight?.batch ?? []), ...state.pending];
       state.pending = [];
+      state.inflight = undefined;
       state.lastSkip = { reason, at: now };
       await this.save(state);
       if (agent) await this.logMessages(state, skipped.map((p) => inboundLog(p.message, messageText(p.message) ?? `[${p.message.type}]`, p.receivedAt)));
@@ -130,21 +140,43 @@ export class ChatQueue extends DurableObject<Env> {
     }
     state.takeoverPauseMin = agent.takeoverPauseMin;
 
-    // Take the batch out first: messages arriving mid-run wait for the next alarm.
-    const batch = state.pending;
+    const maxTurns = intVar(this.env.MAX_INPUT_MESSAGES, 20);
+    // A batch whose run died goes first, together with anything newer.
+    const batch = [...(state.inflight?.batch ?? []), ...state.pending];
+    const attempt = (state.inflight?.attempts ?? 0) + 1;
+    if (attempt > MAX_RUN_ATTEMPTS) {
+      // Every run of this batch died before finishing (a crash, not an error we caught).
+      state.pending = [];
+      state.inflight = undefined;
+      await this.save(state);
+      const texts = batch.map((p) => messageText(p.message) ?? `[sent a ${p.message.type} message]`);
+      await this.giveUp(
+        texts.map((text) => ({ role: "customer" as const, text, at: now })),
+        batch.map((p, i) => inboundLog(p.message, texts[i], p.receivedAt)),
+        maxTurns,
+      );
+      return;
+    }
+
+    // Take the batch out of pending (messages arriving mid-run wait for the
+    // next alarm) but keep it as inflight until its turns are saved.
     const firstContact = agent.firstContact && !state.turns.some((t) => t.role === "agent");
     const resumed = state.ownerTookOver;
     state.pending = [];
+    state.inflight = { batch, attempts: attempt };
     state.ownerTookOver = false;
     state.lastSkip = undefined;
     await this.save(state);
+    // Watchdog: fires only if this run never finishes. A message arriving
+    // mid-run replaces it with an earlier alarm, which retries just the same.
+    await this.ctx.storage.setAlarm(now + RUN_WATCHDOG_MS);
 
     const timings: Record<string, number> = {};
     const dryRun = isOn(this.env.DRY_RUN);
-    const maxTurns = intVar(this.env.MAX_INPUT_MESSAGES, 20);
     const maxChars = intVar(this.env.MAX_MESSAGE_CHARS, 1024);
     const newTurns: Turn[] = [];
     const logged: LoggedMessage[] = [];
+    let replied = false;
     try {
       const last = batch[batch.length - 1].message;
       if (!dryRun) {
@@ -177,7 +209,10 @@ export class ChatQueue extends DurableObject<Env> {
       const t2 = Date.now();
       if (result.text) {
         const wamid = await this.sendReply(state, result.text);
-        turns.push({ role: "agent", text: result.text, at: Date.now() });
+        replied = true;
+        const reply: Turn = { role: "agent", text: result.text, at: Date.now() };
+        turns.push(reply);
+        newTurns.push(reply);
         logged.push({ direction: "out", kind: "text", body: result.text, wamid, at: Date.now() });
       }
       timings.send_ms = Date.now() - t2;
@@ -185,7 +220,9 @@ export class ChatQueue extends DurableObject<Env> {
       // Persist the turns, merging with anything that arrived during the run.
       const fresh = (await this.load()) ?? state;
       fresh.turns = turns.slice(-maxTurns);
+      fresh.inflight = undefined;
       await this.save(fresh);
+      await this.clearWatchdog(fresh);
       await this.logMessages(state, logged);
 
       console.log(
@@ -205,13 +242,47 @@ export class ChatQueue extends DurableObject<Env> {
         }),
       );
     } catch (err) {
-      console.error(JSON.stringify({ evt: "agent_run_failed", chat: chatKey(state), err: String(err), ...timings }));
-      // Keep what the customer said so the next run still has the context.
+      console.error(JSON.stringify({ evt: "agent_run_failed", chat: chatKey(state), attempt, err: String(err), ...timings }));
+      // Retry the same batch shortly, unless the customer already got a reply
+      // (a retry would answer twice) or it keeps failing.
+      if (!replied && attempt < MAX_RUN_ATTEMPTS) {
+        await this.ctx.storage.setAlarm(Date.now() + RETRY_DELAY_MS);
+        return;
+      }
       const fresh = (await this.load()) ?? state;
+      fresh.inflight = undefined;
+      await this.save(fresh);
+      if (!replied) return this.giveUp(newTurns, logged, maxTurns);
+      // Answered but failed afterwards: keep the context like a normal run.
       fresh.turns = [...fresh.turns, ...newTurns].slice(-maxTurns);
       await this.save(fresh);
+      await this.clearWatchdog(fresh);
       await this.logMessages(state, logged);
     }
+  }
+
+  // The batch could not be answered: keep what the customer said so the next
+  // run still has it, and pass the chat to the owner instead of going silent.
+  private async giveUp(newTurns: Turn[], logged: LoggedMessage[], maxTurns: number) {
+    const state = await this.load();
+    if (!state) return;
+    state.turns = [...state.turns, ...newTurns].slice(-maxTurns);
+    await this.save(state);
+    await this.clearWatchdog(state);
+    await this.logMessages(state, logged);
+    try {
+      await callAgentTool(this.env, scopeOf(state), "hand_off", {
+        reason: "The assistant could not answer the customer's last message because of a technical error. Please reply in the chat.",
+      });
+    } catch (err) {
+      console.error(JSON.stringify({ evt: "hand_off_failed", chat: chatKey(state), err: String(err) }));
+    }
+  }
+
+  // Drop the run's watchdog alarm unless something else is waiting for one.
+  private async clearWatchdog(state: ChatState) {
+    if (state.pending.length || state.inflight || state.pendingApprovals?.length) return;
+    await this.ctx.storage.deleteAlarm();
   }
 
   // Sends the reply to the customer (or only logs it with DRY_RUN=1); returns its wamid.
