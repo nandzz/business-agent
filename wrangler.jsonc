@@ -27,6 +27,7 @@
     "DEBOUNCE_MS": "3000",
     "MAX_WAIT_MS": "8000",
     "MAX_INPUT_MESSAGES": "20",
+    "MAX_MESSAGE_CHARS": "1024",
     "TAKEOVER_PAUSE_MIN": "5",
     "DRY_RUN": "0",
     "DEBUG_ROUTES": "0"

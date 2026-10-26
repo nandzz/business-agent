@@ -122,7 +122,7 @@ export const TOOL_DEFS: FunctionTool[] = [
     type: "function",
     name: "hand_off",
     description:
-      "Pass the conversation to the owner: sensitive, unclear or off-topic requests, complaints, refunds, anything you can't answer from the knowledge.",
+      "Pass the conversation to the owner: business matters you can't handle yourself (complaints, refunds, sensitive or unclear requests about the business, questions the knowledge doesn't cover). Never for off-topic requests: decline those yourself.",
     parameters: {
       type: "object",
       properties: { reason: { type: "string" } },

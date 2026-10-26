@@ -69,14 +69,14 @@ export const DEBUG_PAGE = /* html */ `<!doctype html>
     <div class="head"><div class="avatar" id="bizAvatar">B</div><div><div class="who">Business</div><div class="sub" id="cSub">online</div></div><span class="role">Customer phone</span></div>
     <div class="msgs" id="cMsgs"></div>
     <div class="err" id="cErr"></div>
-    <form class="compose" id="cForm"><input id="cText" placeholder="Message as the customer" autocomplete="off"><button type="button" id="mic" title="Record a voice note">🎤</button><button title="Send">➤</button></form>
+    <form class="compose" id="cForm"><input id="cText" maxlength="1024" placeholder="Message as the customer" autocomplete="off"><button type="button" id="mic" title="Record a voice note">🎤</button><button title="Send">➤</button></form>
   </section>
   <section class="phone">
     <div class="head"><div class="avatar" id="custAvatar">C</div><div><div class="who" id="custName">Customer</div><div class="sub" id="bSub"></div></div><span class="role">Business app</span></div>
     <div class="banner" id="paused"></div>
     <div class="msgs" id="bMsgs"></div>
     <div class="err" id="bErr"></div>
-    <form class="compose" id="bForm"><input id="bText" placeholder="Reply as the owner (takes over)" autocomplete="off"><button title="Send">➤</button></form>
+    <form class="compose" id="bForm"><input id="bText" maxlength="4096" placeholder="Reply as the owner (takes over)" autocomplete="off"><button title="Send">➤</button></form>
   </section>
 </div>
 <script>

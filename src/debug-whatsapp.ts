@@ -149,6 +149,8 @@ export async function handleDebugWhatsApp(
     const { text, as, name } = (await request.json()) as { text?: string; as?: "customer" | "owner"; name?: string };
     const body = text?.trim();
     if (!body) return Response.json({ error: "empty" }, { status: 400 });
+    const maxChars = Number.parseInt(env.MAX_MESSAGE_CHARS, 10) || 1024;
+    if (body.length > maxChars) return Response.json({ error: `Message too long: ${body.length}/${maxChars} characters` }, { status: 400 });
     const owner = as === "owner";
     const wamid = await phone.record(pn, wa, owner ? "owner" : "in", "text", body);
     const message: WaMessage = { id: wamid, from: wa, timestamp: unixNow(), type: "text", text: { body } };

@@ -142,6 +142,7 @@ export class ChatQueue extends DurableObject<Env> {
     const timings: Record<string, number> = {};
     const dryRun = isOn(this.env.DRY_RUN);
     const maxTurns = intVar(this.env.MAX_INPUT_MESSAGES, 20);
+    const maxChars = intVar(this.env.MAX_MESSAGE_CHARS, 1024);
     const newTurns: Turn[] = [];
     const logged: LoggedMessage[] = [];
     try {
@@ -155,8 +156,10 @@ export class ChatQueue extends DurableObject<Env> {
       const t0 = Date.now();
       for (const { message, receivedAt } of batch) {
         const text = await this.customerText(message);
-        newTurns.push({ role: "customer", text, at: now });
-        logged.push(inboundLog(message, text, receivedAt));
+        // Over-long messages never reach the model: it only learns the limit was hit.
+        const tooLong = text.length > maxChars;
+        newTurns.push({ role: "customer", text: tooLong ? `[message too long: ${text.length} characters, limit ${maxChars}]` : text, at: now });
+        logged.push(inboundLog(message, tooLong ? `${text.slice(0, maxChars)}…` : text, receivedAt));
       }
       timings.transcribe_ms = Date.now() - t0;
 

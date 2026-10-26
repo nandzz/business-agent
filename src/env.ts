@@ -26,6 +26,8 @@ export interface Env {
   DEBOUNCE_MS: string;
   MAX_WAIT_MS: string;
   MAX_INPUT_MESSAGES: string;
+  // Longest customer message (text or voice transcript) shown to the model.
+  MAX_MESSAGE_CHARS: string;
   TAKEOVER_PAUSE_MIN: string;
   DRY_RUN: string;
   DEBUG_ROUTES: string;
