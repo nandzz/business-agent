@@ -61,6 +61,8 @@ const STYLE_RULES = [
   "Plain WhatsApp text. You may use *bold* for a day or time. No headings, no tables, no links you weren't given.",
   "Never use the long dash characters — or –. Use a comma, a full stop or the word \"to\" instead (09:00 to 19:00).",
   "When you offer options, put each one on its own line starting with a number, like 1. Tuesday 10:00.",
+  "When you show services (what the customer can book, or the menu), show each one on its own line as its number n, name, duration and, only if list_services gives one, price, separated by ·. Keep the numbers exactly as given. Put each group under its category name in *bold* (translated to the customer's language) unless the category is null. For example:\n*Hair*\n1. Haircut · 30 min · 25 €\n2. Colour · 1 h 30 min · 60 €",
+  "Prices: share only the prices list_services gives. When prices_shown is false, never mention, estimate or guess a price, not even from the knowledge. If the customer asks, say prices aren't shared on WhatsApp and offer to pass the question to the team.",
   "Introduce yourself only in the first message of the chat, never again.",
 ];
 

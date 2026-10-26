@@ -15,6 +15,7 @@ import type { CalendarConfig, CalendarService, Location } from "@/lib/types";
 import type { AgentContext } from "./context";
 import type { Env } from "./env";
 import { callAgentTool, type AgentScope } from "./mcp";
+import { serviceMenu } from "./menu";
 
 export type ToolContext = {
   env: Env;
@@ -44,7 +45,7 @@ export const TOOL_DEFS: FunctionTool[] = [
     type: "function",
     name: "list_services",
     description:
-      "Bookable services with id, duration and price, grouped by location (with location_id) when the business has several, plus the staff who can do each.",
+      "The service menu: per location (with location_id) and category, each service with id, ready-to-show duration, price (only when the business shows prices) and the staff who can do it. prices_shown=false means prices are hidden.",
     parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
     strict: true,
   },
@@ -143,9 +144,6 @@ const fmtSlot = (iso: string, timeZone: string) =>
     minute: "2-digit",
   }).format(new Date(iso));
 
-const price = (s: CalendarService, currency: string) =>
-  s.price_cents == null ? null : `${(s.price_cents / 100).toFixed(2)} ${currency.toUpperCase()}`;
-
 type Scope = { location?: Location; services: CalendarService[]; staffNames: Map<string, string>; timezone: string };
 
 // The services/staff/timezone a booking draws from: one location, or the
@@ -212,26 +210,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, t
     case "search_knowledge":
       return callAgentTool(tc.env, tc.scope, "search_knowledge", { query: String(args.query ?? "") });
 
-    case "list_services": {
-      if (!cal) return noBooking;
-      const describe = (services: CalendarService[], staff: { id: string; name: string }[]) =>
-        services.map((s) => ({
-          id: s.id,
-          name: s.name,
-          duration_min: s.duration_min,
-          price: price(s, cal.currency),
-          staff: (s.staff_ids?.length ? staff.filter((p) => s.staff_ids!.includes(p.id)) : staff).map((p) => ({
-            id: p.id,
-            name: p.name,
-          })),
-        }));
-      if (cal.locations.length > 0) {
-        return cal.locations
-          .filter((l) => l.services.length > 0)
-          .map((l) => ({ location_id: l.id, name: l.name, address: l.address ?? null, services: describe(l.services, l.staff) }));
-      }
-      return [{ location_id: null, services: describe(cal.services, cal.staff) }];
-    }
+    case "list_services":
+      return cal ? serviceMenu(cal) : noBooking;
 
     case "check_availability": {
       if (!cal) return noBooking;
