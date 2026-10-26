@@ -7,11 +7,12 @@
 import type { FunctionTool } from "openai/resources/responses/responses";
 import {
   computeSegmentedSlots,
+  eligibleStaffForServices,
   resolveSegmentPlan,
   todayInZone,
   type ServiceChoice,
 } from "@/features/booking/domain/calendar";
-import type { CalendarConfig, CalendarService, Location } from "@/lib/types";
+import type { CalendarConfig, CalendarService, Location, StaffMember } from "@/lib/types";
 import type { AgentContext } from "./context";
 import type { Env } from "./env";
 import { callAgentTool, type AgentScope } from "./mcp";
@@ -53,17 +54,18 @@ export const TOOL_DEFS: FunctionTool[] = [
     type: "function",
     name: "check_availability",
     description:
-      "Free start times for one or more services booked together. Dates are in the business's timezone (YYYY-MM-DD).",
+      "The free start times for one or more services booked together, each with the staff free then. The only source of truth for availability. Dates are in the business's timezone (YYYY-MM-DD).",
     parameters: {
       type: "object",
       properties: {
         service_ids: { type: "array", items: { type: "string" } },
         location_id: nullable("string", "Required when the business has locations"),
-        staff_id: nullable("string", "Only when the customer asked for a specific person"),
+        staff_id: nullable("string", "Only when the customer asked for a specific person: a staff id from list_services"),
         from_date: nullable("string", "First day to check; null = today"),
-        days: nullable("integer", "How many days to check (1–14); null = 7"),
+        days: nullable("integer", "How many days to check (1 to 14); null = 7"),
+        rescheduling_booking_id: nullable("string", "When moving a booking: its booking_id, so its current time doesn't count as busy"),
       },
-      required: ["service_ids", "location_id", "staff_id", "from_date", "days"],
+      required: ["service_ids", "location_id", "staff_id", "from_date", "days", "rescheduling_booking_id"],
       additionalProperties: false,
     },
     strict: true,
@@ -145,7 +147,7 @@ const fmtSlot = (iso: string, timeZone: string) =>
     minute: "2-digit",
   }).format(new Date(iso));
 
-type Scope = { location?: Location; services: CalendarService[]; staffNames: Map<string, string>; timezone: string };
+type Scope = { location?: Location; services: CalendarService[]; staff: StaffMember[]; staffNames: Map<string, string>; timezone: string };
 
 // The services/staff/timezone a booking draws from: one location, or the
 // top-level config when the business has none.
@@ -156,23 +158,48 @@ function bookingScope(cal: CalendarConfig, locationId: string | null): Scope | {
     return {
       location,
       services: location.services,
+      staff: location.staff,
       staffNames: new Map(location.staff.map((s) => [s.id, s.name])),
       timezone: location.timezone || cal.timezone,
     };
   }
-  return { services: cal.services, staffNames: new Map(cal.staff.map((s) => [s.id, s.name])), timezone: cal.timezone };
+  return { services: cal.services, staff: cal.staff, staffNames: new Map(cal.staff.map((s) => [s.id, s.name])), timezone: cal.timezone };
 }
 
-function choicesFor(scope: Scope, serviceIds: unknown, staffId: unknown): ServiceChoice[] | { error: string } {
+type ToolError = { error: string; note?: string; staff?: { id: string; name: string }[] };
+
+// Services + optional staff from the model, checked against the config: an id
+// the model made up is an error that says which ids are valid, never "no slots".
+function choicesFor(scope: Scope, serviceIds: unknown, staffId: unknown): ServiceChoice[] | ToolError {
   const ids = Array.isArray(serviceIds) ? serviceIds.map(String).slice(0, 10) : [];
   if (ids.length === 0) return { error: "service_ids required" };
-  const choices: ServiceChoice[] = [];
+  const services: CalendarService[] = [];
   for (const id of ids) {
     const service = scope.services.find((s) => s.id === id);
-    if (!service) return { error: `unknown service_id ${id}` };
-    choices.push({ service, staffId: typeof staffId === "string" && staffId ? staffId : undefined });
+    if (!service) return { error: `unknown service_id ${id}`, note: "Use a service id from list_services." };
+    services.push(service);
   }
-  return choices;
+  const wanted = typeof staffId === "string" && staffId ? staffId : undefined;
+  if (wanted) {
+    const eligible = eligibleStaffForServices(scope.staff, services);
+    if (!eligible.some((s) => s.id === wanted)) {
+      return {
+        error: `unknown staff_id ${wanted}`,
+        note: "Use one of these staff ids, or null for anyone available.",
+        staff: eligible.map((s) => ({ id: s.id, name: s.name })),
+      };
+    }
+  }
+  return services.map((service) => ({ service, staffId: wanted }));
+}
+
+// Who is free at a slot: staff names per service (empty ⇒ no staff needed).
+function freeStaffAt(cal: CalendarConfig, scope: Scope, choices: ServiceChoice[], start: string, busy: unknown[]) {
+  const plan = resolveSegmentPlan({ config: cal, choices, startIso: start, existingBusy: busy as never, location: scope.location });
+  if (!plan.ok) return null;
+  return Object.fromEntries(
+    plan.segments.map((seg) => [seg.name, seg.staff_ids.map((id) => scope.staffNames.get(id) ?? id)]),
+  );
 }
 
 async function busyFor(tc: ToolContext, scope: Scope, fromDate: string, days: number, excludeBookingId?: string) {
@@ -204,6 +231,14 @@ async function planAt(tc: ToolContext, cal: CalendarConfig, scope: Scope, choice
 
 type MyBooking = { booking_id: string; service_ids: string[]; location_id: string | null; starts_at: string };
 
+// Booking times as the customer reads them (business timezone), next to the UTC instants.
+function withLocalTimes(cal: CalendarConfig | null, bookings: MyBooking[]) {
+  return bookings.map((b) => {
+    const tz = cal?.locations.find((l) => l.id === b.location_id)?.timezone || cal?.timezone || "Europe/Rome";
+    return { ...b, when: fmtSlot(b.starts_at, tz) };
+  });
+}
+
 export async function executeTool(name: string, args: Record<string, unknown>, tc: ToolContext): Promise<unknown> {
   const cal = tc.agent.calendar;
   const noBooking = { error: "online booking is not available for this business; offer to hand off" };
@@ -225,7 +260,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, t
         typeof args.from_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(args.from_date)
           ? args.from_date
           : todayInZone(scope.timezone, tc.now);
-      const busy = await busyFor(tc, scope, fromDate, days);
+      const moving = typeof args.rescheduling_booking_id === "string" ? args.rescheduling_booking_id : undefined;
+      const busy = await busyFor(tc, scope, fromDate, days, moving);
       const slots = computeSegmentedSlots({
         config: cal,
         choices,
@@ -236,15 +272,23 @@ export async function executeTool(name: string, args: Record<string, unknown>, t
         minLeadMinutes: 60,
         location: scope.location,
       });
+      const shown = slots.slice(0, 16).map((s) => ({
+        start: s.start,
+        label: fmtSlot(s.start, scope.timezone),
+        free_staff: freeStaffAt(cal, scope, choices, s.start, busy),
+      }));
       return {
         timezone: scope.timezone,
         total: slots.length,
-        slots: slots.slice(0, 16).map((s) => ({ start: s.start, label: fmtSlot(s.start, scope.timezone) })),
+        slots: shown,
+        note: shown.length
+          ? "Offer only these times, with the staff listed for each."
+          : "No free times in this range. Say so and offer to check other days.",
       };
     }
 
     case "my_bookings":
-      return callAgentTool(tc.env, tc.scope, "my_bookings");
+      return withLocalTimes(cal, ((await callAgentTool(tc.env, tc.scope, "my_bookings")) as MyBooking[]) ?? []);
 
     case "create_booking": {
       if (!cal) return noBooking;

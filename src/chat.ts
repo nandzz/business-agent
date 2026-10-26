@@ -309,7 +309,8 @@ export class ChatQueue extends DurableObject<Env> {
     return (await this.load()) ?? null;
   }
 
-  // Debug WhatsApp only: forget this chat's working context.
+  // Forget this chat's working context (owner deleted the conversation or
+  // disconnected the number; also the Debug WhatsApp reset).
   async reset(): Promise<void> {
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();

@@ -11,6 +11,29 @@ export { DebugWhatsApp } from "./debug-whatsapp";
 
 const chatName = (phoneNumberId: string, customerWaId: string) => `${phoneNumberId}:${customerWaId}`;
 
+const isId = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length < 100;
+
+// A disconnect forgets every chat of the number at once.
+const MAX_FORGET = 5000;
+
+// Pings from the portal are signed like Meta's webhooks (HMAC-SHA256 hex of
+// the raw body), carry ids only and are at most 5 min old. Returns the parsed
+// body, or the error response to send.
+async function readPortalPing<T>(request: Request, env: Env): Promise<(T & { ts?: unknown }) | Response> {
+  const raw = await request.arrayBuffer();
+  if (!(await verifySignature(raw, request.headers.get("x-nandzz-signature"), env.AGENT_NOTIFY_SECRET))) {
+    return new Response("bad signature", { status: 401 });
+  }
+  let body: T & { ts?: unknown };
+  try {
+    body = JSON.parse(new TextDecoder().decode(raw));
+  } catch {
+    return new Response("bad json", { status: 400 });
+  }
+  const fresh = typeof body.ts === "number" && Math.abs(Date.now() / 1000 - body.ts) < 300;
+  return fresh ? body : new Response("bad request", { status: 400 });
+}
+
 export default {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
@@ -35,27 +58,37 @@ export default {
     }
 
     if (url.pathname === "/internal/approval-decided" && request.method === "POST") {
-      // The portal decided an approval: tell the customer. Signed like Meta's
-      // webhooks (HMAC-SHA256 hex of the raw body), ids only, ≤5 min old.
-      const raw = await request.arrayBuffer();
-      if (!(await verifySignature(raw, request.headers.get("x-nandzz-signature"), env.AGENT_NOTIFY_SECRET))) {
-        return new Response("bad signature", { status: 401 });
-      }
-      let body: { approval_id?: unknown; phone_number_id?: unknown; customer_wa_id?: unknown; ts?: unknown };
-      try {
-        body = JSON.parse(new TextDecoder().decode(raw));
-      } catch {
-        return new Response("bad json", { status: 400 });
-      }
-      const fresh = typeof body.ts === "number" && Math.abs(Date.now() / 1000 - body.ts) < 300;
-      const ids = [body.approval_id, body.phone_number_id, body.customer_wa_id];
-      if (!fresh || !ids.every((v) => typeof v === "string" && v.length > 0 && v.length < 100)) {
+      // The portal decided an approval: tell the customer.
+      const body = await readPortalPing<{ approval_id?: unknown; phone_number_id?: unknown; customer_wa_id?: unknown }>(request, env);
+      if (body instanceof Response) return body;
+      if (![body.approval_id, body.phone_number_id, body.customer_wa_id].every(isId)) {
         return new Response("bad request", { status: 400 });
       }
       ctx.waitUntil(
         env.CHAT.getByName(chatName(body.phone_number_id as string, body.customer_wa_id as string))
           .approvalDecided(body.phone_number_id as string, body.customer_wa_id as string, body.approval_id as string)
           .catch((err) => console.error(JSON.stringify({ evt: "approval_notify_failed", err: String(err) }))),
+      );
+      return new Response("accepted", { status: 202 });
+    }
+
+    if (url.pathname === "/internal/forget-chats" && request.method === "POST") {
+      // The owner deleted conversations or disconnected the number: drop the
+      // working memory (recent turns, queued messages) of those chats too.
+      const body = await readPortalPing<{ chats?: unknown }>(request, env);
+      if (body instanceof Response) return body;
+      const chats = Array.isArray(body.chats) ? (body.chats as { phone_number_id?: unknown; customer_wa_id?: unknown }[]) : null;
+      if (!chats || chats.length > MAX_FORGET || !chats.every((c) => isId(c?.phone_number_id) && isId(c?.customer_wa_id))) {
+        return new Response("bad request", { status: 400 });
+      }
+      ctx.waitUntil(
+        Promise.all(
+          chats.map((c) =>
+            env.CHAT.getByName(chatName(c.phone_number_id as string, c.customer_wa_id as string))
+              .reset()
+              .catch((err) => console.error(JSON.stringify({ evt: "forget_chat_failed", err: String(err) }))),
+          ),
+        ),
       );
       return new Response("accepted", { status: 202 });
     }

@@ -13,7 +13,7 @@ export type Turn = { role: "customer" | "agent" | "owner"; text: string; at: num
 
 export type AgentResult = {
   text: string | null;
-  tools: { name: string; ms: number }[];
+  tools: { name: string; ms: number; error?: boolean }[];
   inputTokens: number;
   outputTokens: number;
 };
@@ -70,7 +70,10 @@ export async function runAgent(
       } catch (err) {
         output = { error: String(err) };
       }
-      result.tools.push({ name: call.name, ms: Date.now() - t0 });
+      // Failed tool calls are logged with the error only (no arguments: they can carry customer data).
+      const error = (output as { error?: unknown } | null)?.error;
+      if (error) console.warn(JSON.stringify({ evt: "tool_error", tool: call.name, error: String(error).slice(0, 300) }));
+      result.tools.push({ name: call.name, ms: Date.now() - t0, ...(error ? { error: true } : {}) });
       items.push({ type: "function_call_output", call_id: call.call_id, output: JSON.stringify(output) });
     }
   }
