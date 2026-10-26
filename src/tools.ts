@@ -15,7 +15,7 @@ import type { CalendarConfig, CalendarService, Location, StaffMember } from "@/l
 import type { AgentContext } from "./context";
 import type { Env } from "./env";
 import { callAgentTool, type AgentScope } from "./mcp";
-import { dayAvailability } from "./availability";
+import { MAX_PEOPLE, dayAvailability } from "./availability";
 import { serviceMenu } from "./menu";
 
 export type ToolContext = {
@@ -62,9 +62,10 @@ export const TOOL_DEFS: FunctionTool[] = [
         location_id: nullable("string", "Required when the business has locations"),
         staff_id: nullable("string", "Only when the customer asked for a specific person: a staff id from list_services"),
         date: { type: "string", description: "The day the customer chose, YYYY-MM-DD in the business's timezone" },
+        people: nullable("integer", "How many people want this service (the customer plus family or friends); null = 1"),
         rescheduling_booking_id: nullable("string", "When moving a booking: its booking_id, so its current time doesn't count as busy"),
       },
-      required: ["service_ids", "location_id", "staff_id", "date", "rescheduling_booking_id"],
+      required: ["service_ids", "location_id", "staff_id", "date", "people", "rescheduling_booking_id"],
       additionalProperties: false,
     },
     strict: true,
@@ -251,7 +252,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, t
       const moving = typeof args.rescheduling_booking_id === "string" ? args.rescheduling_booking_id : undefined;
       // The asked day plus two weeks, so a full day can point to the next free ones.
       const busy = await busyFor(tc, scope, date, 15, moving);
-      return dayAvailability({ cal, scope, choices, date, busy, now: tc.now });
+      const people = Math.min(MAX_PEOPLE, Math.max(1, Number(args.people ?? 1) || 1));
+      return dayAvailability({ cal, scope, choices, date, busy, now: tc.now, people });
     }
 
     case "my_bookings":
