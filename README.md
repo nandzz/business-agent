@@ -22,6 +22,7 @@ harness.
 - `src/tools.ts`: the agent's tools; reads and writes go through mcp-agent, slot math runs here
 - `src/mcp.ts`: mcp-agent client, mints one signed run token per tool call
 - `src/meta.ts`: WhatsApp Cloud API payloads and Graph calls
+- `src/mock.ts`, `src/mock-page.ts`: local mock WhatsApp (`MOCK_WHATSAPP=1`): fake Graph DO + `/mock` page
 
 ## Run locally
 
@@ -37,6 +38,23 @@ Without Meta, with `DRY_RUN=1` (replies are logged, not sent):
 npm run simulate -- "Ciao, avete posto sabato mattina?"
 npm run simulate -- --echo "Ti scrivo io"   # owner typed on the phone → agent pauses
 ```
+
+### Mock WhatsApp (no Meta needed)
+
+```bash
+npm run mock                     # then open http://localhost:8787/mock
+```
+
+A customer phone and the business's WhatsApp Business app side by side. What
+you type goes through the real webhook path (signed with `META_APP_SECRET`, any
+value works), the real agent, OpenAI, mcp-agent and Supabase dev: bookings are
+real in dev. Only the transport is faked: the worker's Graph calls (send, read +
+typing, voice-note download) land in the `MockWhatsApp` Durable Object instead of
+`graph.facebook.com`. Supports voice notes (mic button), owner takeover (type in
+the business pane) and approvals (decide in the local portal, which pings
+`AGENT_WORKER_URL=http://localhost:8787`). The business number defaults to
+`TEST_PHONE_NUMBER_ID`, the dev test connection. `MOCK_WHATSAPP` is `0` in
+`wrangler.jsonc`, so a deployed worker never serves `/mock`.
 
 With the Meta test number, expose the worker over HTTPS and point the app's
 webhook at it (callback `https://<tunnel>/webhook`, verify token = `META_VERIFY_TOKEN`,

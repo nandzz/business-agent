@@ -5,6 +5,7 @@
   "description": "Nandzz Business Agent: WhatsApp webhook, per-chat queue and agent worker (Cloudflare Workers + Durable Objects).",
   "scripts": {
     "dev": "wrangler dev",
+    "mock": "wrangler dev --var MOCK_WHATSAPP:1 --var DEBUG_ROUTES:1",
     "typecheck": "tsc --noEmit",
     "simulate": "node scripts/simulate.mjs",
     "deploy": "wrangler deploy"

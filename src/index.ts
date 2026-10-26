@@ -4,8 +4,10 @@
 import { isOn, type Env } from "./env";
 import { callAgentTool } from "./mcp";
 import { extractEvents, verifySignature, type WebhookPayload } from "./meta";
+import { handleMock } from "./mock";
 
 export { ChatQueue } from "./chat";
+export { MockWhatsApp } from "./mock";
 
 const chatName = (phoneNumberId: string, customerWaId: string) => `${phoneNumberId}:${customerWaId}`;
 
@@ -25,29 +27,11 @@ export default {
     }
 
     if (url.pathname === "/webhook" && request.method === "POST") {
-      const receivedAt = Date.now();
-      const raw = await request.arrayBuffer();
-      if (!(await verifySignature(raw, request.headers.get("x-hub-signature-256"), env.META_APP_SECRET))) {
-        console.warn(JSON.stringify({ evt: "bad_signature" }));
-        return new Response("bad signature", { status: 401 });
-      }
-      let payload: WebhookPayload;
-      try {
-        payload = JSON.parse(new TextDecoder().decode(raw));
-      } catch {
-        return new Response("bad json", { status: 400 });
-      }
-      const events = extractEvents(payload, receivedAt);
-      ctx.waitUntil(
-        Promise.all(
-          events.map((event) =>
-            env.CHAT.getByName(chatName(event.phoneNumberId, event.customerWaId))
-              .ingest(event)
-              .catch((err) => console.error(JSON.stringify({ evt: "ingest_failed", err: String(err) }))),
-          ),
-        ),
-      );
-      return new Response("ok", { status: 200 });
+      return handleWebhook(await request.arrayBuffer(), request.headers.get("x-hub-signature-256"), env, ctx);
+    }
+
+    if ((url.pathname === "/mock" || url.pathname.startsWith("/mock/")) && isOn(env.MOCK_WHATSAPP)) {
+      return handleMock(request, env, url, (raw, signature) => handleWebhook(raw, signature, env, ctx), chatName);
     }
 
     if (url.pathname === "/internal/approval-decided" && request.method === "POST") {
@@ -105,3 +89,28 @@ export default {
     return new Response("not found", { status: 404 });
   },
 } satisfies ExportedHandler<Env>;
+
+async function handleWebhook(raw: ArrayBuffer, signature: string | null, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const receivedAt = Date.now();
+  if (!(await verifySignature(raw, signature, env.META_APP_SECRET))) {
+    console.warn(JSON.stringify({ evt: "bad_signature" }));
+    return new Response("bad signature", { status: 401 });
+  }
+  let payload: WebhookPayload;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(raw));
+  } catch {
+    return new Response("bad json", { status: 400 });
+  }
+  const events = extractEvents(payload, receivedAt);
+  ctx.waitUntil(
+    Promise.all(
+      events.map((event) =>
+        env.CHAT.getByName(chatName(event.phoneNumberId, event.customerWaId))
+          .ingest(event)
+          .catch((err) => console.error(JSON.stringify({ evt: "ingest_failed", err: String(err) }))),
+      ),
+    ),
+  );
+  return new Response("ok", { status: 200 });
+}

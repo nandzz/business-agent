@@ -6,9 +6,16 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "durable_objects": {
-    "bindings": [{ "name": "CHAT", "class_name": "ChatQueue" }]
+    "bindings": [
+      { "name": "CHAT", "class_name": "ChatQueue" },
+      // Local mock WhatsApp only (MOCK_WHATSAPP=1); unused when deployed.
+      { "name": "MOCK", "class_name": "MockWhatsApp" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ChatQueue"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ChatQueue"] },
+    { "tag": "v2", "new_sqlite_classes": ["MockWhatsApp"] }
+  ],
   // Non-secret defaults. Secrets go in .dev.vars locally (see .dev.vars.example)
   // and `wrangler secret put` when deployed.
   "vars": {
@@ -22,6 +29,7 @@
     "MAX_INPUT_MESSAGES": "20",
     "TAKEOVER_PAUSE_MIN": "5",
     "DRY_RUN": "0",
-    "DEBUG_ROUTES": "0"
+    "DEBUG_ROUTES": "0",
+    "MOCK_WHATSAPP": "0"
   }
 }
