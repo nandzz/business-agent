@@ -237,7 +237,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, t
   switch (name) {
     case "search_knowledge": {
       const query = String(args.query ?? "");
-      return callAgentTool(tc.env, tc.scope, "search_knowledge", { query, embedding: await embed(tc.env, query) });
+      const found = (await callAgentTool(tc.env, tc.scope, "search_knowledge", { query, embedding: await embed(tc.env, query) })) as {
+        mode?: string;
+        results?: { similarity?: number }[];
+      };
+      // Search quality at a glance; no query text (it's the customer's words).
+      console.log(JSON.stringify({ evt: "knowledge_search", mode: found?.mode, results: found?.results?.length ?? 0, best: found?.results?.[0]?.similarity ?? null }));
+      return found;
     }
 
     case "list_services":
