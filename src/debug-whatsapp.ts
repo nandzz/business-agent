@@ -139,6 +139,7 @@ export async function handleDebugWhatsApp(
       ...chat,
       pausedUntil: state?.pausedUntil ?? 0,
       pending: state?.pending.length ?? 0,
+      lastSkip: state?.lastSkip ?? null,
       dryRun: env.DRY_RUN === "1" || env.DRY_RUN === "true",
       now: Date.now(),
     });

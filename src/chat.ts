@@ -27,6 +27,8 @@ type ChatState = {
   takeoverPauseMin?: number;
   // Owner decisions waiting for the takeover pause to end before we tell the customer.
   pendingApprovals?: string[];
+  // Why the last batch got no reply (shown in /debug/whatsapp); cleared on a run.
+  lastSkip?: { reason: string; at: number };
 };
 
 type LoggedMessage = { direction: "in" | "out" | "owner"; kind: "text" | "voice" | "other"; body: string; wamid?: string; at: number };
@@ -121,6 +123,7 @@ export class ChatQueue extends DurableObject<Env> {
       console.log(JSON.stringify({ evt: skip, chat: chatKey(state) }));
       const skipped = state.pending;
       state.pending = [];
+      state.lastSkip = { reason: skip ?? "not_connected", at: now };
       await this.save(state);
       if (agent) await this.logMessages(state, skipped.map((p) => inboundLog(p.message, messageText(p.message) ?? `[${p.message.type}]`, p.receivedAt)));
       return;
@@ -133,6 +136,7 @@ export class ChatQueue extends DurableObject<Env> {
     const resumed = state.ownerTookOver;
     state.pending = [];
     state.ownerTookOver = false;
+    state.lastSkip = undefined;
     await this.save(state);
 
     const timings: Record<string, number> = {};

@@ -122,7 +122,9 @@ async function refresh() {
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || res.status);
     data = json;
-    $("cErr").textContent = data.dryRun ? "DRY_RUN=1: the agent's replies are only logged. Set DRY_RUN=0 in .dev.vars." : "";
+    const why = { agent_disabled: "the agent is switched off (My Agent header switch)", outside_hours: "outside the agent's working hours", not_connected: "this phone_number_id has no active WhatsApp connection" };
+    $("cErr").textContent = data.dryRun ? "DRY_RUN=1: the agent's replies are only logged. Set DRY_RUN=0 in .dev.vars."
+      : data.lastSkip ? "No reply: " + (why[data.lastSkip.reason] || data.lastSkip.reason) + "." : "";
   } catch (e) { $("cErr").textContent = String(e.message || e); return; }
   const key = JSON.stringify([data.messages, data.typing]);
   if (key !== last) {
