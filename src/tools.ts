@@ -218,6 +218,8 @@ async function planAt(tc: ToolContext, cal: CalendarConfig, scope: Scope, choice
     startIso: startDate.toISOString(),
     existingBusy: busy,
     location: scope.location,
+    // Starts reused from earlier in a chat can have passed since.
+    now: new Date(),
   });
 }
 
