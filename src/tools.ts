@@ -341,6 +341,11 @@ function withNote(result: { status?: string; error?: string }, timezone?: string
       return { ...result, when, note: "Tell the customer the request was sent and the business will confirm shortly. Do not say it is confirmed." };
     case "not_allowed":
       return { ...result, note: "This isn't possible through chat: offer to hand off to the business." };
+    case "too_late":
+      return {
+        ...result,
+        note: "It's too close to the appointment to change or cancel it online (the business's cancellation deadline). Nothing was changed. Tell the customer and offer to hand off to the business.",
+      };
     default:
       // A booking error from the database (SLOT_TAKEN, OUT_OF_HOURS, …): nothing was done.
       return result?.error

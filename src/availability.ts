@@ -18,8 +18,6 @@ import type { CalendarConfig, Location } from "@/lib/types";
 // How far ahead to look for other days when the asked day is full.
 const LOOKAHEAD_DAYS = 14;
 const NEXT_DAYS_SHOWN = 3;
-// Bookings must start at least this long from now.
-const MIN_LEAD_MINUTES = 60;
 // Group options returned for several people, spread over the day.
 const GROUP_OPTIONS_SHOWN = 6;
 export const MAX_PEOPLE = 6;
@@ -69,7 +67,8 @@ export function dayAvailability(input: {
     days: LOOKAHEAD_DAYS + 1,
     existingBusy: busy,
     now,
-    minLeadMinutes: MIN_LEAD_MINUTES,
+    // The business's own minimum booking notice (normalized, default 60).
+    minLeadMinutes: cal.min_notice_min,
     location: scope.location,
   });
   const dayOf = (iso: string) => todayInZone(scope.timezone, new Date(iso));
